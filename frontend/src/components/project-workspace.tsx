@@ -22,6 +22,7 @@ import type { Project, QualityScore } from "@/lib/types";
 export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const { user, loading, configured } = useAuth();
   const [project, setProject] = useState<Project | null>(null);
+  const [projectLoading, setProjectLoading] = useState(true);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [latex, setLatex] = useState("");
   const [quality, setQuality] = useState<QualityScore | null>(null);
@@ -35,35 +36,47 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     if (!user) return;
     const userId = user.uid;
     let cancelled = false;
+    setProjectLoading(true);
 
     async function load() {
-      const loadedProject = await getProject(userId, projectId);
-      if (!loadedProject || cancelled) {
-        setProject(null);
-        return;
-      }
-      setProject(loadedProject);
-      setLatex(loadedProject.latest_latex ?? "");
-      if (loadedProject.quality_score) {
-        const score = loadedProject.quality_score;
-        setQuality({
-          grammar: score,
-          readability: score,
-          technical_depth: score,
-          formatting_quality: score,
-          citation_quality: score,
-          overall: score,
-          suggestions: ["Open the generated LaTeX and improve content depth, citations, and diagrams."],
-        });
-      }
+      try {
+        const loadedProject = await getProject(userId, projectId);
+        if (cancelled) return;
+        if (!loadedProject) {
+          setProject(null);
+          return;
+        }
+        setProject(loadedProject);
+        setLatex(loadedProject.latest_latex ?? "");
+        if (loadedProject.quality_score) {
+          const score = loadedProject.quality_score;
+          setQuality({
+            grammar: score,
+            readability: score,
+            technical_depth: score,
+            formatting_quality: score,
+            citation_quality: score,
+            overall: score,
+            suggestions: ["Open the generated LaTeX and improve content depth, citations, and diagrams."],
+          });
+        }
 
-      const questionnaire = await getDoc(doc(getFirebaseDb(), "users", userId, "projects", projectId, "questionnaires", "current"));
-      if (questionnaire.exists() && !cancelled) {
-        setAnswers((questionnaire.data().answers ?? {}) as Record<string, string>);
+        const questionnaire = await getDoc(doc(getFirebaseDb(), "users", userId, "projects", projectId, "questionnaires", "current"));
+        if (questionnaire.exists() && !cancelled) {
+          setAnswers((questionnaire.data().answers ?? {}) as Record<string, string>);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMessage(error instanceof Error ? error.message : "Could not load project.");
+        }
+      } finally {
+        if (!cancelled) {
+          setProjectLoading(false);
+        }
       }
     }
 
-    load().catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Could not load project."));
+    load();
     return () => {
       cancelled = true;
     };
@@ -108,7 +121,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
   }
 
   if (!configured) return <FirebaseConfigWarning />;
-  if (loading) return <p className="text-sm text-muted-foreground">Loading account...</p>;
+  if (loading || (user && projectLoading)) return <p className="text-sm text-muted-foreground">Loading project...</p>;
   if (!user) {
     return (
       <Card>

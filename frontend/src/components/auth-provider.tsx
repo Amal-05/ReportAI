@@ -27,7 +27,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    return onAuthStateChanged(getFirebaseAuth(), (nextUser) => {
+    return onAuthStateChanged(getFirebaseAuth(), async (nextUser) => {
+      if (nextUser) {
+        try {
+          const token = await nextUser.getIdToken();
+          localStorage.setItem("reportai_token", token);
+        } catch (error) {
+          console.error("Error getting ID token:", error);
+        }
+      } else {
+        localStorage.removeItem("reportai_token");
+      }
       setUser(nextUser);
       setLoading(false);
     });

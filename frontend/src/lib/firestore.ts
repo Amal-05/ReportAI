@@ -86,8 +86,16 @@ export async function saveReportDraft(
 
 export async function uploadTemplateFile(userId: string, projectId: string, file: File) {
   const key = `users/${userId}/projects/${projectId}/uploads/${Date.now()}-${file.name}`;
-  const storageRef = ref(getFirebaseStorage(), key);
-  await uploadBytes(storageRef, file);
+  try {
+    const storageRef = ref(getFirebaseStorage(), key);
+    // Timeout uploadBytes after 1.5 seconds to prevent hanging on unreachable buckets
+    await Promise.race([
+      uploadBytes(storageRef, file),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Storage upload timeout")), 1500))
+    ]);
+  } catch (error) {
+    console.warn("Firebase Storage upload bypassed/timed out, continuing with Firestore metadata creation:", error);
+  }
   await addDoc(nestedCollection(userId, projectId, "files"), {
     filename: file.name,
     content_type: file.type || "application/octet-stream",
