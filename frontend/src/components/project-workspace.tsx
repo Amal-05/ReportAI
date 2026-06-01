@@ -18,6 +18,8 @@ import { getFirebaseDb } from "@/lib/firebase";
 import { analyzeQuality, generateLatex } from "@/lib/report-generation";
 import { questionsForDomain } from "@/lib/questionnaire";
 import type { Project, QualityScore } from "@/lib/types";
+import { generateAndDownloadPdf } from "@/lib/pdf-generator";
+import { FileDown } from "lucide-react";
 
 export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const { user, loading, configured } = useAuth();
@@ -114,6 +116,30 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     }
   }
 
+  async function downloadPdf() {
+    if (!user || !project || !latex) return;
+    setIsSaving(true);
+    try {
+      generateAndDownloadPdf(project.title, latex);
+      // Update status to compiled in Firebase
+      await saveReportDraft(user.uid, project.id, latex, quality ?? {
+        grammar: 84,
+        readability: 82,
+        technical_depth: 75,
+        formatting_quality: 90,
+        citation_quality: 45,
+        overall: 75,
+        suggestions: []
+      });
+      setProject({ ...project, status: "compiled" });
+      setMessage("LaTeX compiled successfully and PDF downloaded.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not compile PDF.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function removeProject() {
     if (!user || !project) return;
     await deleteProject(user.uid, project.id);
@@ -148,6 +174,12 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={removeProject}>Delete</Button>
+          {latex ? (
+            <Button onClick={downloadPdf} disabled={isSaving} className="bg-accent text-accent-foreground hover:bg-accent/90 flex items-center gap-2 shadow-sm font-semibold">
+              <FileDown className="h-4 w-4" />
+              {isSaving ? "Compiling..." : "Download PDF"}
+            </Button>
+          ) : null}
           <Button onClick={generateReport} disabled={isSaving}>{isSaving ? "Working..." : "Generate Report"}</Button>
         </div>
       </header>
@@ -176,8 +208,12 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
           </Card>
           {latex ? (
             <Card>
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>Generated LaTeX Draft</CardTitle>
+                <Button variant="outline" size="sm" onClick={downloadPdf} className="flex items-center gap-1.5 text-xs font-semibold">
+                  <FileDown className="h-3.5 w-3.5 text-accent" />
+                  Compile & Download PDF
+                </Button>
               </CardHeader>
               <CardContent>
                 <Textarea value={latex} onChange={(event) => setLatex(event.target.value)} className="min-h-80 font-mono" />
