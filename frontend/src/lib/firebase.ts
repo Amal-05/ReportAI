@@ -34,6 +34,10 @@ export function getFirebaseAuth() {
 }
 
 export function getFirebaseDb() {
+  const dbId = process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID;
+  if (dbId) {
+    return getFirestore(getFirebaseApp(), dbId);
+  }
   return getFirestore(getFirebaseApp());
 }
 
