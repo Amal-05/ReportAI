@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +19,17 @@ class Settings(BaseSettings):
     s3_bucket: str = "reportai"
     s3_region: str = "us-east-1"
     frontend_url: str = "http://localhost:3000"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def assemble_db_connection(cls, v: str | None) -> str:
+        if not v:
+            return "postgresql+psycopg://reportai:reportai@localhost:5432/reportai"
+        if v.startswith("postgres://"):
+            v = v.replace("postgres://", "postgresql+psycopg://", 1)
+        elif v.startswith("postgresql://") and not v.startswith("postgresql+psycopg://"):
+            v = v.replace("postgresql://", "postgresql+psycopg://", 1)
+        return v
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
