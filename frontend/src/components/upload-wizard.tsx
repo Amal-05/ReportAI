@@ -21,7 +21,7 @@ import { uploadTemplateFile, getProject, saveQuestionnaire, saveLearnedTemplate 
 
 const steps = ["Upload", "Extract", "Learn", "Validate"];
 
-export function UploadWizard({ projectId }: { projectId?: string }) {
+export function UploadWizard({ projectId, onSuccess }: { projectId?: string; onSuccess?: () => void }) {
   const [active, setActive] = useState(0);
   const [maxActive, setMaxActive] = useState(0);
   const [files, setFiles] = useState<FileList | null>(null);
@@ -118,6 +118,9 @@ export function UploadWizard({ projectId }: { projectId?: string }) {
       }
 
       setMessage("Guidelines successfully learned! Template profile generated.");
+      if (onSuccess) {
+        onSuccess();
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Upload and processing failed.");
     } finally {

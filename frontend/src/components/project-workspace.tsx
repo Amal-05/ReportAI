@@ -36,64 +36,54 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const [isGeneratingQuestions, setIsGeneratingQuestions] = useState(false);
   const router = useRouter();
 
-  useEffect(() => {
+  async function loadProjectData() {
     if (!user) return;
-    const userId = user.uid;
-    let cancelled = false;
-    setProjectLoading(true);
+    try {
+      const loadedProject = await getProject(user.uid, projectId);
+      if (!loadedProject) {
+        setProject(null);
+        return;
+      }
+      setProject(loadedProject);
+      setLatex(loadedProject.latest_latex ?? "");
+      if (loadedProject.quality_score) {
+        const score = loadedProject.quality_score;
+        setQuality({
+          grammar: score,
+          readability: score,
+          technical_depth: score,
+          formatting_quality: score,
+          citation_quality: score,
+          overall: score,
+          suggestions: ["Open the generated LaTeX and improve content depth, citations, and diagrams."],
+        });
+      }
 
-    async function load() {
-      try {
-        const loadedProject = await getProject(userId, projectId);
-        if (cancelled) return;
-        if (!loadedProject) {
-          setProject(null);
-          return;
-        }
-        setProject(loadedProject);
-        setLatex(loadedProject.latest_latex ?? "");
-        if (loadedProject.quality_score) {
-          const score = loadedProject.quality_score;
-          setQuality({
-            grammar: score,
-            readability: score,
-            technical_depth: score,
-            formatting_quality: score,
-            citation_quality: score,
-            overall: score,
-            suggestions: ["Open the generated LaTeX and improve content depth, citations, and diagrams."],
-          });
-        }
-
-        const questionnaire = await getDoc(doc(getFirebaseDb(), "users", userId, "projects", projectId, "questionnaires", "current"));
-        if (questionnaire.exists() && !cancelled) {
-          const qData = questionnaire.data();
-          setAnswers((qData.answers ?? {}) as Record<string, string>);
-          if (qData.questions && Array.isArray(qData.questions) && qData.questions.length > 0) {
-            setQuestions(qData.questions);
-          } else {
-            const fallbackQs = generateFallbackQuestions(loadedProject.title, loadedProject.description, loadedProject.domain);
-            setQuestions(fallbackQs);
-          }
+      const questionnaire = await getDoc(doc(getFirebaseDb(), "users", user.uid, "projects", projectId, "questionnaires", "current"));
+      if (questionnaire.exists()) {
+        const qData = questionnaire.data();
+        setAnswers((qData.answers ?? {}) as Record<string, string>);
+        if (qData.questions && Array.isArray(qData.questions) && qData.questions.length > 0) {
+          setQuestions(qData.questions);
         } else {
           const fallbackQs = generateFallbackQuestions(loadedProject.title, loadedProject.description, loadedProject.domain);
           setQuestions(fallbackQs);
         }
-      } catch (error) {
-        if (!cancelled) {
-          setMessage(error instanceof Error ? error.message : "Could not load project.");
-        }
-      } finally {
-        if (!cancelled) {
-          setProjectLoading(false);
-        }
+      } else {
+        const fallbackQs = generateFallbackQuestions(loadedProject.title, loadedProject.description, loadedProject.domain);
+        setQuestions(fallbackQs);
       }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not load project.");
     }
+  }
 
-    load();
-    return () => {
-      cancelled = true;
-    };
+  useEffect(() => {
+    if (!user) return;
+    setProjectLoading(true);
+    loadProjectData().finally(() => {
+      setProjectLoading(false);
+    });
   }, [projectId, user]);
 
   async function saveAnswers() {
@@ -323,7 +313,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
           <QualityPanel score={quality} />
         </div>
         <div className="space-y-5">
-          <UploadWizard projectId={project.id} />
+          <UploadWizard projectId={project.id} onSuccess={loadProjectData} />
           <GenerationTimeline status={project.status} />
         </div>
       </section>
