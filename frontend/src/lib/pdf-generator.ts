@@ -68,7 +68,7 @@ export function generateAndDownloadPdf(projectTitle: string, latex: string) {
   doc.line(pageWidth / 2 - 30, 115, pageWidth / 2 + 30, 115);
 
   // Cover Metadata
-  doc.setFont("helvetica", "medium");
+  doc.setFont("helvetica", "normal");
   doc.setFontSize(11);
   doc.setTextColor(71, 85, 105);
   doc.text("Prepared by ReportAI Platform", pageWidth / 2, 135, { align: "center" });
@@ -99,7 +99,7 @@ export function generateAndDownloadPdf(projectTitle: string, latex: string) {
 
   let tocY = 55;
   chapters.forEach((ch, index) => {
-    doc.setFont("helvetica", "semibold");
+    doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
     doc.setTextColor(30, 41, 59);
     doc.text(`Chapter ${index + 1}: ${ch.title}`, margin, tocY);
