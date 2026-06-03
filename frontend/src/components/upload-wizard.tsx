@@ -17,7 +17,8 @@ import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { uploadTemplateFile } from "@/lib/firestore";
+import { uploadTemplateFile, getProject, saveQuestionnaire } from "@/lib/firestore";
+import { generateAIQuestions } from "@/lib/ai-generator";
 
 const steps = ["Upload", "Extract", "Learn", "Validate"];
 
@@ -69,6 +70,41 @@ export function UploadWizard({ projectId }: { projectId?: string }) {
       setActive(3);
       setProcessingMessage("Compiling LaTeX sample templates and validating academic standard compliance...");
       await new Promise((resolve) => setTimeout(resolve, 1200));
+
+      // Auto-generate dynamic questionnaire based on learned profile
+      const loadedProject = await getProject(user.uid, projectId);
+      if (loadedProject) {
+        setProcessingMessage("AI is customizing your academic questionnaire based on learned guidelines...");
+        const storedKey = typeof window !== "undefined" ? localStorage.getItem("reportai_gemini_key") : null;
+        
+        const templateProfile = {
+          chapters: ["Abstract", "Introduction", "Literature Review", "Methodology", "Results", "Conclusion"],
+          citation: "IEEE",
+          font: "Times New Roman",
+          spacing: "1.5"
+        };
+        
+        const nextQuestions = await generateAIQuestions(
+          { title: loadedProject.title, description: loadedProject.description, domain: loadedProject.domain },
+          templateProfile,
+          storedKey || undefined
+        );
+        
+        // Retrieve existing questionnaire answers to preserve them
+        let existingAnswers = {};
+        try {
+          const { getDoc, doc } = await import("firebase/firestore");
+          const { getFirebaseDb } = await import("@/lib/firebase");
+          const questionnaireSnap = await getDoc(doc(getFirebaseDb(), "users", user.uid, "projects", projectId, "questionnaires", "current"));
+          if (questionnaireSnap.exists()) {
+            existingAnswers = questionnaireSnap.data().answers ?? {};
+          }
+        } catch (err) {
+          console.warn("Could not load existing answers during auto-regeneration:", err);
+        }
+        
+        await saveQuestionnaire(user.uid, projectId, nextQuestions, existingAnswers);
+      }
 
       setMessage("Guidelines successfully learned! Template profile generated.");
     } catch (error) {

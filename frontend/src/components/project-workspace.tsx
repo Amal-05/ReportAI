@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, collection, getDocs, limit, orderBy, query } from "firebase/firestore";
 import { useAuth } from "@/components/auth-provider";
 import { FirebaseConfigWarning } from "@/components/firebase-config-warning";
 import { GenerationTimeline } from "@/components/generation-timeline";
@@ -13,26 +13,36 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { deleteProject, getProject, saveQuestionnaire, saveReportDraft } from "@/lib/firestore";
 import { getFirebaseDb } from "@/lib/firebase";
 import { analyzeQuality, generateLatex } from "@/lib/report-generation";
-import { questionsForDomain } from "@/lib/questionnaire";
+import { generateAIQuestions, generateFallbackQuestions } from "@/lib/ai-generator";
+import type { Question } from "@/lib/questionnaire";
 import type { Project, QualityScore } from "@/lib/types";
 import { generateAndDownloadPdf } from "@/lib/pdf-generator";
-import { FileDown } from "lucide-react";
+import { FileDown, Settings, Sparkles, Loader2 } from "lucide-react";
 
 export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const { user, loading, configured } = useAuth();
   const [project, setProject] = useState<Project | null>(null);
   const [projectLoading, setProjectLoading] = useState(true);
+  const [questions, setQuestions] = useState<Question[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [latex, setLatex] = useState("");
   const [quality, setQuality] = useState<QualityScore | null>(null);
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [isGeneratingQuestions, setIsGeneratingQuestions] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [apiKey, setApiKey] = useState("");
   const router = useRouter();
 
-  const questions = useMemo(() => questionsForDomain(project?.domain ?? ""), [project?.domain]);
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setApiKey(localStorage.getItem("reportai_gemini_key") ?? "");
+    }
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -65,7 +75,17 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
 
         const questionnaire = await getDoc(doc(getFirebaseDb(), "users", userId, "projects", projectId, "questionnaires", "current"));
         if (questionnaire.exists() && !cancelled) {
-          setAnswers((questionnaire.data().answers ?? {}) as Record<string, string>);
+          const qData = questionnaire.data();
+          setAnswers((qData.answers ?? {}) as Record<string, string>);
+          if (qData.questions && Array.isArray(qData.questions) && qData.questions.length > 0) {
+            setQuestions(qData.questions);
+          } else {
+            const fallbackQs = generateFallbackQuestions(loadedProject.title, loadedProject.description, loadedProject.domain);
+            setQuestions(fallbackQs);
+          }
+        } else {
+          const fallbackQs = generateFallbackQuestions(loadedProject.title, loadedProject.description, loadedProject.domain);
+          setQuestions(fallbackQs);
         }
       } catch (error) {
         if (!cancelled) {
@@ -95,6 +115,43 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
       setMessage(error instanceof Error ? error.message : "Could not save answers.");
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function triggerAiQuestionGeneration() {
+    if (!user || !project) return;
+    setIsGeneratingQuestions(true);
+    setMessage("");
+    try {
+      if (typeof window !== "undefined") {
+        localStorage.setItem("reportai_gemini_key", apiKey);
+      }
+
+      let templateProfile: any = undefined;
+      try {
+        const templatesSnap = await getDocs(
+          query(collection(getFirebaseDb(), "users", user.uid, "projects", project.id, "templates"), orderBy("created_at", "desc"), limit(1))
+        );
+        if (!templatesSnap.empty) {
+          templateProfile = templatesSnap.docs[0].data().profile;
+        }
+      } catch (err) {
+        console.warn("Could not load template profile for AI questions:", err);
+      }
+
+      const nextQuestions = await generateAIQuestions(
+        { title: project.title, description: project.description, domain: project.domain },
+        templateProfile,
+        apiKey || undefined
+      );
+
+      setQuestions(nextQuestions);
+      await saveQuestionnaire(user.uid, project.id, nextQuestions, answers);
+      setMessage(apiKey ? "AI Questionnaire generated successfully!" : "Smart project-aware questions generated successfully!");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Failed to generate questions.");
+    } finally {
+      setIsGeneratingQuestions(false);
     }
   }
 
@@ -188,22 +245,99 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
 
       <section className="mt-6 grid gap-5 xl:grid-cols-[1fr_380px]">
         <div className="space-y-5">
-          <Card>
-            <CardHeader>
-              <CardTitle>Adaptive Questionnaire</CardTitle>
+          <Card className="overflow-hidden border border-border bg-card shadow-md">
+            <CardHeader className="flex flex-row items-center justify-between border-b bg-muted/20 pb-4">
+              <div>
+                <CardTitle className="text-lg font-semibold flex items-center gap-2">
+                  <Sparkles className="h-5 w-5 text-accent animate-pulse" />
+                  Adaptive Questionnaire
+                </CardTitle>
+                <p className="text-xs text-muted-foreground mt-1">AI-generated topics specific to your project design</p>
+              </div>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => setShowSettings(!showSettings)}
+                className="flex items-center gap-1 text-xs"
+              >
+                <Settings className="h-3.5 w-3.5" />
+                AI Customizer
+              </Button>
             </CardHeader>
-            <CardContent className="space-y-4">
-              {questions.map((question) => (
-                <label key={question.id} className="block">
-                  <span className="mb-2 block text-sm font-medium">{question.label}</span>
-                  <Textarea
-                    value={answers[question.id] ?? ""}
-                    onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
-                    placeholder="Enter project-specific answer..."
-                  />
-                </label>
-              ))}
-              <Button onClick={saveAnswers} disabled={isSaving}>Save answers</Button>
+            <CardContent className="p-6 space-y-4">
+              {showSettings && (
+                <div className="rounded-lg border bg-accent/5 p-4 space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-accent flex items-center gap-1.5">
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Gemini AI Configuration
+                    </h4>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    Enter your Gemini API key below to perform deep academic analysis on your project details and guidelines, generating customized report sections and questions. Left blank, the system will use smart keyword matching.
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      type="password"
+                      placeholder="Enter Gemini API Key (saved locally)..."
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      className="text-xs font-mono"
+                    />
+                    <Button 
+                      onClick={triggerAiQuestionGeneration} 
+                      disabled={isGeneratingQuestions}
+                      size="sm"
+                      className="whitespace-nowrap font-semibold"
+                    >
+                      {isGeneratingQuestions ? (
+                        <>
+                          <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                          Analyzing...
+                        </>
+                      ) : (
+                        "Generate"
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {questions.length === 0 ? (
+                <div className="flex flex-col items-center justify-center p-6 border border-dashed rounded-md bg-muted/10">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary mb-2" />
+                  <p className="text-xs text-muted-foreground">Initializing questionnaire questions...</p>
+                </div>
+              ) : (
+                questions.map((question) => (
+                  <label key={question.id} className="block space-y-2">
+                    <span className="text-sm font-semibold text-foreground flex items-center gap-1">
+                      <span className="h-1.5 w-1.5 rounded-full bg-primary/75" />
+                      {question.label}
+                    </span>
+                    <Textarea
+                      value={answers[question.id] ?? ""}
+                      onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
+                      placeholder="Enter project-specific answer..."
+                      className="bg-background/50 hover:bg-background/80 focus:bg-background transition-colors duration-150 min-h-20 text-sm"
+                    />
+                  </label>
+                ))
+              )}
+              <div className="pt-2 flex gap-2">
+                <Button onClick={saveAnswers} disabled={isSaving} className="font-semibold shadow-sm">
+                  {isSaving ? "Saving..." : "Save Answers"}
+                </Button>
+                <Button 
+                  variant="outline" 
+                  onClick={triggerAiQuestionGeneration} 
+                  disabled={isGeneratingQuestions} 
+                  className="flex items-center gap-1 text-xs border-dashed font-medium text-muted-foreground hover:text-foreground"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-accent" />
+                  Regenerate Questions
+                </Button>
+              </div>
             </CardContent>
           </Card>
           {latex ? (
