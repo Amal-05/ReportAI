@@ -66,3 +66,91 @@ async def learn_template(
     db.commit()
     db.refresh(template)
     return template
+
+
+@router.post("/learn-public", status_code=status.HTTP_200_OK)
+async def learn_template_public(
+    uploads: list[UploadFile] = UploadFileField(...),
+) -> dict:
+    processor = DocumentProcessor()
+    documents = []
+
+    for upload in uploads:
+        content = await upload.read()
+        documents.append(processor.extract(upload.filename or "", content))
+
+    full_text = "\n\n".join(doc.text for doc in documents)[:15000]
+    
+    from openai import OpenAI
+    from app.core.config import settings
+    from app.services.template_learning import TemplateLearningService
+    
+    if not settings.openai_api_key:
+        profile, confidence = TemplateLearningService().learn(documents)
+        questions = [
+            {"id": "problem_statement", "label": "What specific problem does your project solve?", "type": "textarea"},
+            {"id": "objectives", "label": "What are the primary objectives of the project?", "type": "textarea"}
+        ]
+        for chapter in profile.get("chapters", []):
+            if chapter.lower() not in ["abstract", "acknowledgement", "conclusion"]:
+                questions.append({
+                    "id": f"details_{chapter.lower().replace(' ', '_')}",
+                    "label": f"Describe the key aspects to include in the '{chapter}' section.",
+                    "type": "textarea"
+                })
+        return {
+            "profile": profile,
+            "confidence": confidence,
+            "questions": questions
+        }
+
+    client = OpenAI(api_key=settings.openai_api_key)
+    prompt = f"""Analyze the following university report guidelines / sample document text and learn the required structure and styling parameters.
+    
+Guidelines Text:
+{full_text}
+
+Extract and generate a JSON object with these exact keys:
+1. "chapters": A JSON array of the primary structural chapters/sections required for the report in correct order (e.g. ["Abstract", "Introduction", "Literature Review", "System Architecture", "Methodology", "Results", "Conclusion"]).
+2. "citation": The expected citation format (e.g. "IEEE", "APA", "Harvard").
+3. "font": The typography font name if specified (default: "Times New Roman").
+4. "spacing": The line spacing value (default: "1.5").
+5. "questions": A JSON array of 5 to 7 highly customized, project-specific and guideline-specific academic questions to ask the student in order to compile the content for these chapters. Each question object must have:
+   - "id": unique lowercase alphanumeric key (e.g. "dataset_details", "hardware_pins")
+   - "label": clear question text (e.g. "Detail the sensor specifications and connection ports used in your microcontroller design.")
+   - "type": "text" or "textarea"
+
+Return ONLY the raw JSON object. No explanations, no markdown styling."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a university report analysis bot. You must extract report parameters and return only valid JSON output."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={ "type": "json_object" }
+        )
+        import json
+        result = json.loads(response.choices[0].message.content.strip())
+        profile = {
+            "chapters": result.get("chapters", ["Abstract", "Introduction", "Literature Review", "Methodology", "Results", "Conclusion"]),
+            "citation": result.get("citation", "IEEE"),
+            "font": result.get("font", "Times New Roman"),
+            "spacing": result.get("spacing", "1.5"),
+            "heading_hierarchy": ["chapter", "section", "subsection"],
+            "page_layout": {"paper": "A4", "margin": "1in"},
+        }
+        return {
+            "profile": profile,
+            "confidence": 0.95,
+            "questions": result.get("questions", [])
+        }
+    except Exception as e:
+        print(f"Error learning template via OpenAI: {e}")
+        profile, confidence = TemplateLearningService().learn(documents)
+        return {
+            "profile": profile,
+            "confidence": confidence,
+            "questions": []
+        }

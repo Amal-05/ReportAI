@@ -104,17 +104,22 @@ export async function uploadTemplateFile(userId: string, projectId: string, file
     purpose: "template_source",
     created_at: serverTimestamp(),
   });
+  await updateProject(userId, projectId, { status: "template_uploaded" });
+}
+
+export async function saveLearnedTemplate(
+  userId: string,
+  projectId: string,
+  name: string,
+  profile: any,
+  confidence: number
+) {
   await addDoc(nestedCollection(userId, projectId, "templates"), {
-    name: file.name,
-    profile: {
-      chapters: ["Abstract", "Introduction", "Literature Review", "Methodology", "Results", "Conclusion"],
-      citation: "IEEE",
-      font: "Times New Roman",
-      spacing: "1.5",
-      source_file: file.name,
-    },
-    confidence: 0.7,
+    name,
+    profile,
+    confidence,
     created_at: serverTimestamp(),
   });
   await updateProject(userId, projectId, { status: "template_uploaded" });
 }
+

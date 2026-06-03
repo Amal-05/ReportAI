@@ -17,8 +17,7 @@ import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { uploadTemplateFile, getProject, saveQuestionnaire } from "@/lib/firestore";
-import { generateAIQuestions } from "@/lib/ai-generator";
+import { uploadTemplateFile, getProject, saveQuestionnaire, saveLearnedTemplate } from "@/lib/firestore";
 
 const steps = ["Upload", "Extract", "Learn", "Validate"];
 
@@ -63,6 +62,22 @@ export function UploadWizard({ projectId }: { projectId?: string }) {
       setMaxActive(2);
       setActive(2);
       setProcessingMessage("Synthesizing typographical layout, spacing metrics, and academic style guidelines...");
+      
+      const formData = new FormData();
+      for (const file of Array.from(files)) {
+        formData.append("uploads", file);
+      }
+      const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+      const res = await fetch(`${API_URL}/templates/learn-public`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(errText || `Failed to analyze templates (Status ${res.status})`);
+      }
+      const learnedData = await res.json();
+
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
       // Transition to stage 3: Validate
@@ -75,14 +90,15 @@ export function UploadWizard({ projectId }: { projectId?: string }) {
       const loadedProject = await getProject(user.uid, projectId);
       if (loadedProject) {
         setProcessingMessage("AI is customizing your academic questionnaire based on learned guidelines...");
-        const nextQuestions = await generateAIQuestions(
-          { title: loadedProject.title, description: loadedProject.description, domain: loadedProject.domain },
-          {
-            chapters: ["Abstract", "Introduction", "Literature Review", "Methodology", "Results", "Conclusion"],
-            citation: "IEEE",
-            font: "Times New Roman",
-            spacing: "1.5"
-          }
+        
+        // Save learned template profile & confidence
+        const firstFileName = files[0]?.name || "guideline_document";
+        await saveLearnedTemplate(
+          user.uid,
+          projectId,
+          firstFileName,
+          learnedData.profile,
+          learnedData.confidence ?? 0.95
         );
         
         // Retrieve existing questionnaire answers to preserve them
@@ -98,7 +114,7 @@ export function UploadWizard({ projectId }: { projectId?: string }) {
           console.warn("Could not load existing answers during auto-regeneration:", err);
         }
         
-        await saveQuestionnaire(user.uid, projectId, nextQuestions, existingAnswers);
+        await saveQuestionnaire(user.uid, projectId, learnedData.questions || [], existingAnswers);
       }
 
       setMessage("Guidelines successfully learned! Template profile generated.");

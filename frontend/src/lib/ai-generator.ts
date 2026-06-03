@@ -46,78 +46,35 @@ export function generateFallbackQuestions(title: string, description: string, do
   return questions;
 }
 
-// AI Question Generator using OpenAI API (same API key structure as LaTeX generation)
+// AI Question Generator calling Backend API
 export async function generateAIQuestions(
   project: { title: string; description: string; domain: string },
   templateProfile?: { chapters?: string[]; citation?: string; font?: string; spacing?: string }
 ): Promise<Question[]> {
-  const finalApiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-
-  if (!finalApiKey) {
-    console.log("No OpenAI API key found, generating smart fallback questions.");
-    return generateFallbackQuestions(project.title, project.description, project.domain);
-  }
-
-  const chaptersStr = templateProfile?.chapters?.join(", ") || "None extracted yet";
-  
-  const prompt = `Based on the following project information and styling template guidelines, generate a list of 5 to 7 specific, highly relevant questionnaire questions (in English) to gather the necessary details from the student to generate a high-quality, comprehensive academic report.
-
-Project Title: ${project.title}
-Domain: ${project.domain}
-Description: ${project.description}
-Extracted Template Chapters: ${chaptersStr}
-
-Return the output as a JSON object with a key "questions" containing an array of objects. Each object in the array must have exactly these fields:
-- "id": A unique short identifier (using lowercase alphanumeric and underscores, e.g. "dataset_source")
-- "label": The question text to display to the user (e.g. "What datasets will you use, and how will they be preprocessed?")
-- "type": Either "text" (for short inputs) or "textarea" (for detailed descriptions).
-
-Ensure the questions cover the core methodology, architecture/design, implementation details, evaluation/results, and challenges of the project. Do not generate generic questions; tailor them specifically to the project's domain and description.`;
-
+  const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    const response = await fetch(`${API_URL}/generation/questions-public`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${finalApiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: "You are an academic advisor. You must return only a valid JSON object containing an array of questions under the key \"questions\". Do not return any other text, markdown formatting, or explanation."
-          },
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
-        response_format: { type: "json_object" }
+        project,
+        templateProfile,
       }),
     });
 
     if (!response.ok) {
-      throw new Error(`OpenAI API returned status ${response.status}`);
+      throw new Error(`Backend questions generation returned status ${response.status}`);
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
-    
-    if (!content) {
-      throw new Error("Empty response from OpenAI API");
+    if (Array.isArray(data.questions) && data.questions.length > 0) {
+      return data.questions as Question[];
     }
-
-    const parsed = JSON.parse(content.trim());
-    const parsedQuestions = parsed.questions || parsed;
-
-    if (Array.isArray(parsedQuestions) && parsedQuestions.length > 0) {
-      return parsedQuestions as Question[];
-    }
-    
-    throw new Error("Parsed JSON is not a valid non-empty array of questions");
+    throw new Error("Invalid questions response from backend");
   } catch (error) {
-    console.error("Error generating AI questions, falling back to rule-based questions:", error);
+    console.error("Error generating AI questions via backend:", error);
     return generateFallbackQuestions(project.title, project.description, project.domain);
   }
 }
