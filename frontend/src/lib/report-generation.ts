@@ -74,7 +74,7 @@ export async function enhanceAnswersWithAI(
   questions: Question[],
   project: Project
 ): Promise<Record<string, string>> {
-  const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+  const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://reportai-ytsn.onrender.com/api/v1";
   try {
     const response = await fetch(`${API_URL}/generation/enhance-answers-public`, {
       method: "POST",
@@ -116,7 +116,7 @@ export async function generateLatexWithAI(
   answers: Record<string, string>,
   questions: Question[]
 ): Promise<string> {
-  const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+  const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://reportai-ytsn.onrender.com/api/v1";
   try {
     const response = await fetch(`${API_URL}/generation/generate-report-public`, {
       method: "POST",

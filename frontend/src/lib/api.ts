@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://reportai-ytsn.onrender.com/api/v1";
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = typeof window !== "undefined" ? window.localStorage.getItem("reportai_token") : null;

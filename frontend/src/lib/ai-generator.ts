@@ -51,7 +51,7 @@ export async function generateAIQuestions(
   project: { title: string; description: string; domain: string },
   templateProfile?: { chapters?: string[]; citation?: string; font?: string; spacing?: string }
 ): Promise<Question[]> {
-  const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+  const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://reportai-ytsn.onrender.com/api/v1";
   try {
     const response = await fetch(`${API_URL}/generation/questions-public`, {
       method: "POST",

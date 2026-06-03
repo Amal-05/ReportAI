@@ -67,7 +67,7 @@ export function UploadWizard({ projectId }: { projectId?: string }) {
       for (const file of Array.from(files)) {
         formData.append("uploads", file);
       }
-      const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+      const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://reportai-ytsn.onrender.com/api/v1";
       const res = await fetch(`${API_URL}/templates/learn-public`, {
         method: "POST",
         body: formData,
