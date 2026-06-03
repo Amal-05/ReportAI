@@ -16,7 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { deleteProject, getProject, saveQuestionnaire, saveReportDraft } from "@/lib/firestore";
 import { getFirebaseDb } from "@/lib/firebase";
-import { analyzeQuality, generateLatex } from "@/lib/report-generation";
+import { analyzeQuality, generateLatex, enhanceAnswersWithAI, generateLatexWithAI } from "@/lib/report-generation";
 import { generateAIQuestions, generateFallbackQuestions } from "@/lib/ai-generator";
 import type { Question } from "@/lib/questionnaire";
 import type { Project, QualityScore } from "@/lib/types";
@@ -142,17 +142,34 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     }
   }
 
+  async function enhanceAnswers() {
+    if (!user || !project) return;
+    setIsSaving(true);
+    setMessage("AI is enhancing your questionnaire answers and removing NIL responses...");
+    try {
+      const nextAnswers = await enhanceAnswersWithAI(answers, questions, project);
+      setAnswers(nextAnswers);
+      await saveQuestionnaire(user.uid, project.id, questions, nextAnswers);
+      setMessage("Questionnaire answers successfully enhanced by AI and saved!");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not enhance answers.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function generateReport() {
     if (!user || !project) return;
     setIsSaving(true);
+    setMessage("AI is analyzing your details and dynamically drafting your LaTeX report...");
     try {
-      const nextLatex = generateLatex(project, answers);
+      const nextLatex = await generateLatexWithAI(project, answers, questions);
       const nextQuality = analyzeQuality(nextLatex, 0);
       await saveReportDraft(user.uid, project.id, nextLatex, nextQuality);
       setLatex(nextLatex);
       setQuality(nextQuality);
       setProject({ ...project, status: "latex_ready", latest_latex: nextLatex, quality_score: nextQuality.overall });
-      setMessage("Report draft and quality score saved to Firebase.");
+      setMessage("Report draft dynamically generated and quality score saved to Firebase.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not generate report.");
     } finally {
@@ -264,9 +281,18 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                   </label>
                 ))
               )}
-              <div className="pt-2 flex gap-2">
+              <div className="pt-2 flex flex-wrap gap-2">
                 <Button onClick={saveAnswers} disabled={isSaving} className="font-semibold shadow-sm">
                   {isSaving ? "Saving..." : "Save Answers"}
+                </Button>
+                <Button 
+                  variant="outline"
+                  onClick={enhanceAnswers}
+                  disabled={isSaving}
+                  className="flex items-center gap-1.5 text-xs font-semibold"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-accent animate-pulse" />
+                  Auto-Enhance with AI
                 </Button>
                 <Button 
                   variant="outline" 

@@ -1,4 +1,5 @@
 import type { Project, QualityScore } from "@/lib/types";
+import type { Question } from "./questionnaire";
 
 export const reportSections = [
   "Abstract",
@@ -15,9 +16,28 @@ export const reportSections = [
   "Future Scope",
 ];
 
+// Helper function to check if a string is considered "NIL" or equivalent empty answer
+export function isNilAnswer(value: string): boolean {
+  const clean = value.trim().toLowerCase();
+  return (
+    clean === "" ||
+    clean === "nil" ||
+    clean === "none" ||
+    clean === "nothing" ||
+    clean === "n/a" ||
+    clean === "na" ||
+    clean === "not applicable" ||
+    clean === "null" ||
+    clean === "no" ||
+    clean === "none." ||
+    clean === "nil."
+  );
+}
+
+// Fallback Static LaTeX generator
 export function generateLatex(project: Project, answers: Record<string, string>) {
   const answerText = Object.entries(answers)
-    .filter(([, value]) => value.trim())
+    .filter(([, value]) => value && !isNilAnswer(value))
     .map(([key, value]) => `${key.replaceAll("_", " ")}: ${value}`)
     .join("\\\\\n");
 
@@ -46,6 +66,195 @@ ${answerText || "Project-specific evidence should be added through the questionn
 \bibliographystyle{IEEEtran}
 \bibliography{references}
 \end{document}`;
+}
+
+// AI-based questionnaire answer enhancer
+export async function enhanceAnswersWithAI(
+  answers: Record<string, string>,
+  questions: Question[],
+  project: Project
+): Promise<Record<string, string>> {
+  const finalApiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+  if (!finalApiKey) {
+    console.warn("No OpenAI API key found, skipping answer enhancement.");
+    return answers;
+  }
+
+  // Filter out NIL/empty answers and compile active answers
+  const activeAnswers = Object.entries(answers)
+    .filter(([key, val]) => val && !isNilAnswer(val))
+    .map(([key, val]) => {
+      const q = questions.find(question => question.id === key);
+      const label = q ? q.label : key.replaceAll("_", " ");
+      return `${label}: ${val}`;
+    })
+    .join("\n\n");
+
+  if (!activeAnswers) {
+    // Just clear out NIL values locally
+    const nextAnswers = { ...answers };
+    for (const key of Object.keys(answers)) {
+      if (isNilAnswer(answers[key])) {
+        nextAnswers[key] = "";
+      }
+    }
+    return nextAnswers;
+  }
+
+  const prompt = `You are an academic writing assistant. Enhance the following point-form or informal answers provided by a student for their academic project questionnaire.
+Project Title: ${project.title}
+Domain: ${project.domain}
+Description: ${project.description}
+
+Here are the student's raw answers:
+${activeAnswers}
+
+Instructions:
+1. Rewrite each answer into a highly professional, well-structured, formal academic paragraph.
+2. Maintain technical accuracy but enhance vocabulary, grammar, and flow.
+3. Return the output strictly as a JSON object where the keys are the original question IDs (e.g. "objectives", "tech_stack") and the values are the rewritten academic paragraphs. Do not return any other text, markdown formatting, or explain anything.`;
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${finalApiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: "You are an academic advisor. You must return only a valid JSON object mapping question IDs to enhanced text paragraphs. Do not return any markdown code blocks, explanations, or other text."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        response_format: { type: "json_object" }
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API returned status ${response.status}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new Error("Empty response from OpenAI API");
+    }
+
+    const parsed = JSON.parse(content.trim()) as Record<string, string>;
+    
+    // Merge back, setting NIL/ignored answers to empty strings
+    const nextAnswers = { ...answers };
+    for (const key of Object.keys(answers)) {
+      if (isNilAnswer(answers[key])) {
+        nextAnswers[key] = "";
+      } else if (parsed[key]) {
+        nextAnswers[key] = parsed[key];
+      }
+    }
+    return nextAnswers;
+  } catch (error) {
+    console.error("Error enhancing answers with AI:", error);
+    const nextAnswers = { ...answers };
+    for (const key of Object.keys(answers)) {
+      if (isNilAnswer(answers[key])) {
+        nextAnswers[key] = "";
+      }
+    }
+    return nextAnswers;
+  }
+}
+
+// AI-based Dynamic LaTeX generator
+export async function generateLatexWithAI(
+  project: Project,
+  answers: Record<string, string>,
+  questions: Question[]
+): Promise<string> {
+  const finalApiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+
+  // Fallback to static generator if no key is configured
+  if (!finalApiKey) {
+    console.log("No OpenAI API key found, generating static template report.");
+    return generateLatex(project, answers);
+  }
+
+  // Filter out any NIL/ignored answers
+  const answersString = Object.entries(answers)
+    .filter(([key, val]) => val && !isNilAnswer(val))
+    .map(([key, val]) => {
+      const q = questions.find(question => question.id === key);
+      const label = q ? q.label : key.replaceAll("_", " ");
+      return `- ${label}: ${val}`;
+    })
+    .join("\n");
+
+  const prompt = `You are a world-class academic LaTeX writing system. Write a comprehensive, highly detailed academic project report in LaTeX for the following project:
+
+Project Title: ${project.title}
+Domain: ${project.domain}
+Description: ${project.description}
+
+Student Questionnaire Details:
+${answersString || "None provided"}
+
+Instructions:
+1. Generate a complete, compiler-ready LaTeX document starting with \\documentclass[12pt,a4paper]{report} and ending with \\end{document}.
+2. Use standard report chapters: Abstract, Introduction, Literature Review, Methodology, System Design, Implementation, Testing, Results, and Conclusion.
+3. Enhance all questionnaire details and write them contextually into highly detailed paragraphs (using academic tone, formal vocabulary, and scientific formatting).
+4. Organize the layout elegantly: use subsections, bullet lists (itemize/enumerate), and LaTeX layout wrappers where appropriate.
+5. Include a Table of Contents (\\tableofcontents) and Title Page (\\maketitle).
+6. Do NOT wrap the LaTeX output in markdown ticks (e.g. \`\`\`latex ... \`\`\`). The output must be the raw LaTeX source string directly.`;
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${finalApiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: "You are a LaTeX report writing system. You output ONLY raw LaTeX code. No explanations, no markdown blocks, no leading/trailing commentary."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ]
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API returned status ${response.status}`);
+    }
+
+    const data = await response.json();
+    let content = data.choices?.[0]?.message?.content;
+    
+    if (!content) {
+      throw new Error("Empty response from OpenAI API");
+    }
+
+    content = content.trim();
+    if (content.startsWith("```")) {
+      content = content.replace(/^```latex\s*/i, "").replace(/^```\s*/, "").replace(/```$/, "").trim();
+    }
+
+    return content;
+  } catch (error) {
+    console.error("Error generating LaTeX report with AI, falling back to static template:", error);
+    return generateLatex(project, answers);
+  }
 }
 
 export function analyzeQuality(latex: string, referenceCount: number): QualityScore {
