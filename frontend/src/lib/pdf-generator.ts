@@ -3,11 +3,31 @@ import { jsPDF } from "jspdf";
 type ParsedSection = { title: string; body: string };
 type RenderBlock = { type: "paragraph"; text: string } | { type: "list-item"; text: string };
 
+function extractCommandContent(source: string, command: string) {
+  const start = source.indexOf(`\\${command}{`);
+  if (start === -1) return "";
+
+  const contentStart = start + command.length + 2;
+  let depth = 1;
+
+  for (let index = contentStart; index < source.length; index++) {
+    const char = source[index];
+    const previous = source[index - 1];
+
+    if (char === "{" && previous !== "\\") depth++;
+    if (char === "}" && previous !== "\\") depth--;
+    if (depth === 0) return source.slice(contentStart, index);
+  }
+
+  return "";
+}
+
 function normalizeLatexText(value: string) {
   return value
     .replace(/\r\n/g, "\n")
-    .replace(/(^|[^\\])%[^\n]*/g, "$1")
+    .replace(/(^|[^\\])%.*$/gm, "$1")
     .replace(/```(?:latex)?|```/gi, "")
+    .replace(/\\(?:vspace|hspace)\*?\{[^}]*\}/g, "")
     .replace(/\\&/g, "&")
     .replace(/\\%/g, "%")
     .replace(/\\\$/g, "$")
@@ -33,7 +53,7 @@ function stripLatexCommands(value: string) {
     .replace(/\\(?:label|ref|pageref|bibliographystyle|bibliography)\{[^}]*\}/g, "")
     .replace(/\\(?:begin|end)\{[^}]+\}(?:\[[^\]]*\])?/g, "")
     .replace(/\blstlisting(?:\[[^\]]*\])?/gi, "")
-    .replace(/\[[^\]]*(?:label|language|caption)\s*=[^\]]*\]\s*/gi, "")
+    .replace(/\[[^\]]*(?:label|leftmargin|language|caption)\s*=[^\]]*\]\s*/gi, "")
     .replace(/\\(?:onehalfspacing|maketitle|tableofcontents|clearpage|newpage|noindent|centering)\b/g, "")
     .replace(/\\(?:textbf|textit|texttt|emph|underline|url)\{([^{}]*)\}/g, "$1")
     .replace(/\\(?:textbf|textit|texttt|emph|underline|url)\{?/g, "")
@@ -51,9 +71,10 @@ function stripLatexCommands(value: string) {
 
 function parseBlocks(value: string): RenderBlock[] {
   const itemMarker = "__REPORTAI_LIST_ITEM__";
-  const prepared = value
+  const prepared = normalizeLatexText(value)
     .replace(/\\begin\{(?:itemize|enumerate)\}(?:\[[^\]]*\])?|\\end\{(?:itemize|enumerate)\}/g, "\n")
     .replace(/\\begin\{(?:lstlisting|verbatim|minted)\}(?:\[[^\]]*\])?|\\end\{(?:lstlisting|verbatim|minted)\}/g, "\n")
+    .replace(/\[[^\]]*(?:label|leftmargin|language|caption)\s*=[^\]]*\]\s*/gi, "")
     .replace(/\\item(?:\[[^\]]*\])?/g, `\n${itemMarker} `)
     .replace(/(^|\s)(?:[*-]|\d+[.)])\s+(?=[A-Z0-9])/g, `\n${itemMarker} `)
     .replace(/\\\\|\\newline/g, "\n");
@@ -119,8 +140,8 @@ export function generateAndDownloadPdf(projectTitle: string, latex: string) {
   const contentWidth = pageWidth - (margin * 2);
 
   // 1. Parse Title, Author, Chapters, and Sections
-  const titleMatch = latex.match(/\\title\{([\s\S]*?)\}/);
-  const parsedTitle = stripLatexCommands(titleMatch ? titleMatch[1] : projectTitle);
+  const titleContent = extractCommandContent(latex, "title");
+  const parsedTitle = stripLatexCommands(titleContent || projectTitle) || projectTitle;
 
   // Extract Chapters
   const chapterRegex = /\\chapter\*?\{([^}]+)\}([\s\S]*?)(?=\\chapter\*?\{|\s*\\bibliographystyle|\s*\\end\{document\})/g;
