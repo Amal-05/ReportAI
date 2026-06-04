@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File as UploadFileField, UploadFile, status
+from fastapi import APIRouter, Depends, File as UploadFileField, UploadFile, status, Header
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -71,6 +71,7 @@ async def learn_template(
 @router.post("/learn-public", status_code=status.HTTP_200_OK)
 async def learn_template_public(
     uploads: list[UploadFile] = UploadFileField(...),
+    x_openai_api_key: str | None = Header(None, alias="X-OpenAI-API-Key"),
 ) -> dict:
     processor = DocumentProcessor()
     documents = []
@@ -85,7 +86,8 @@ async def learn_template_public(
     from app.core.config import settings
     from app.services.template_learning import TemplateLearningService
     
-    if not settings.openai_api_key:
+    api_key = x_openai_api_key or settings.openai_api_key
+    if not api_key:
         profile, confidence = TemplateLearningService().learn(documents)
         questions = [
             {"id": "problem_statement", "label": "What specific problem does your project solve?", "type": "textarea"},
@@ -104,7 +106,7 @@ async def learn_template_public(
             "questions": questions
         }
 
-    client = OpenAI(api_key=settings.openai_api_key)
+    client = OpenAI(api_key=api_key)
     prompt = f"""Analyze the following university report guidelines / sample document text and learn the required structure and styling parameters.
     
 Guidelines Text:

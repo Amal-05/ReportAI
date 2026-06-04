@@ -1,7 +1,7 @@
 from uuid import UUID
 import re
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Header
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -112,7 +112,10 @@ def generate_content(
 
 
 @router.post("/enhance-answers-public")
-async def enhance_answers_public(payload: EnhanceAnswersRequest):
+async def enhance_answers_public(
+    payload: EnhanceAnswersRequest,
+    x_openai_api_key: str | None = Header(None, alias="X-OpenAI-API-Key"),
+):
     active_answers = []
     for key, val in payload.answers.items():
         if val and not is_nil_answer(val):
@@ -134,7 +137,8 @@ async def enhance_answers_public(payload: EnhanceAnswersRequest):
 
     active_answers_str = "\n\n".join(active_answers)
 
-    if not settings.openai_api_key:
+    api_key = x_openai_api_key or settings.openai_api_key
+    if not api_key:
         next_answers = {}
         for key, val in payload.answers.items():
             if is_nil_answer(val):
@@ -157,7 +161,7 @@ Instructions:
 3. Return the output strictly as a JSON object where the keys are the original question IDs (e.g. "problem_statement", "tech_stack") and the values are the rewritten academic paragraphs. Do not return any other text, markdown formatting, or explain anything."""
 
     try:
-        client = OpenAI(api_key=settings.openai_api_key)
+        client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -196,7 +200,10 @@ Instructions:
 
 
 @router.post("/generate-report-public")
-async def generate_report_public(payload: GenerateReportRequest):
+async def generate_report_public(
+    payload: GenerateReportRequest,
+    x_openai_api_key: str | None = Header(None, alias="X-OpenAI-API-Key"),
+):
     active_answers = []
     for key, val in payload.answers.items():
         if val and not is_nil_answer(val):
@@ -225,24 +232,60 @@ async def generate_report_public(payload: GenerateReportRequest):
             "Future Scope",
         ]
         
-        answer_text_lines = []
-        for key, val in payload.answers.items():
-            if val and not is_nil_answer(val):
-                clean_key = key.replace("_", " ")
-                answer_text_lines.append(f"{clean_key}: {val}")
-        answer_text = "\\\\\n".join(answer_text_lines)
+        # Map specific question keys/patterns to LaTeX chapters to avoid duplicate content on all pages
+        chapter_mappings = {
+            "Abstract": ["abstract", "problem_statement"],
+            "Acknowledgement": [],
+            "Introduction": ["objectives", "scope"],
+            "Literature Review": ["literature_review", "background"],
+            "System Analysis": ["system_analysis", "requirements"],
+            "System Design": ["system_design", "hardware_architecture", "tech_stack", "software_architecture", "database_design"],
+            "Methodology": ["methodology", "implementation_tools", "system_architecture"],
+            "Implementation": ["implementation", "hardware_protocol", "power_control"],
+            "Testing": ["testing_methods", "test_cases"],
+            "Results": ["results", "evaluation_metrics"],
+            "Conclusion": ["conclusion"],
+            "Future Scope": ["future_scope"]
+        }
 
         sections_tex = []
         for section in report_sections:
             sec_tex = f"\\chapter{{{section}}}\n"
-            sec_tex += f"{payload.project.title} is an academic project in the {payload.project.domain} domain. {payload.project.description}\n\n"
-            sec_tex += "\\section{Project Evidence}\n"
-            sec_tex += f"{answer_text if answer_text else 'Project-specific evidence should be added through the questionnaire.'}"
+            
+            # Gather answers belonging to this section
+            section_keys = chapter_mappings.get(section, [])
+            section_answers = []
+            for key in section_keys:
+                for ans_key, ans_val in payload.answers.items():
+                    if ans_val and not is_nil_answer(ans_val):
+                        # Match if ans_key contains the mapped key or vice versa
+                        if ans_key == key or key in ans_key or ans_key in key:
+                            clean_key = ans_key.replace("_", " ").title()
+                            section_answers.append(f"\\textbf{{{clean_key}}}: {ans_val}")
+            
+            # Set specific descriptive paragraphs per section to look premium and distinct
+            if section == "Abstract":
+                sec_tex += f"This document presents the project report for \\textbf{{{payload.project.title}}}, an academic work in the {payload.project.domain} domain.\n\n"
+                sec_tex += f"{payload.project.description}\n\n"
+            elif section == "Acknowledgement":
+                sec_tex += f"The authors would like to express their sincere gratitude to project advisors, classmates, and all contributors who provided feedback and assistance during the development of \\textbf{{{payload.project.title}}}.\n\n"
+            else:
+                sec_tex += f"This chapter discusses the technical implementation details, designs, and analysis associated with the {section.lower()} phase of the \\textbf{{{payload.project.title}}} project.\n\n"
+
+            if section_answers:
+                sec_tex += "\\section{Project Evidence}\n"
+                sec_tex += "\\\\\n".join(section_answers) + "\n"
+            else:
+                if section not in ["Abstract", "Acknowledgement"]:
+                    sec_tex += f"Detailed descriptions and research results for the {section.lower()} are currently being documented.\n"
+            
             sections_tex.append(sec_tex)
         
         sections_joined = "\n\n".join(sections_tex)
 
-        return f"""\\documentclass[12pt,a4paper]{{report}}
+        return f"""% Compiled in local offline fallback mode.
+% To enable high-quality dynamic academic report generation, please configure the NEXT_PUBLIC_OPENAI_API_KEY environment variable.
+\\documentclass[12pt,a4paper]{{report}}
 \\usepackage[margin=1in]{{geometry}}
 \\usepackage{{setspace}}
 \\usepackage{{hyperref}}
@@ -260,7 +303,8 @@ async def generate_report_public(payload: GenerateReportRequest):
 \\bibliography{{references}}
 \\end{{document}}"""
 
-    if not settings.openai_api_key:
+    api_key = x_openai_api_key or settings.openai_api_key
+    if not api_key:
         return {"latex": get_fallback_latex()}
 
     prompt = f"""You are a world-class academic LaTeX writing system. Write a comprehensive, highly detailed academic project report in LaTeX for the following project:
@@ -281,7 +325,7 @@ Instructions:
 6. Do NOT wrap the LaTeX output in markdown ticks (e.g. ```latex ... ```). The output must be the raw LaTeX source string directly."""
 
     try:
-        client = OpenAI(api_key=settings.openai_api_key)
+        client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -308,10 +352,14 @@ Instructions:
 
 
 @router.post("/questions-public")
-async def generate_questions_public(payload: GenerateQuestionsRequest):
+async def generate_questions_public(
+    payload: GenerateQuestionsRequest,
+    x_openai_api_key: str | None = Header(None, alias="X-OpenAI-API-Key"),
+):
     chapters_str = ", ".join(payload.templateProfile.chapters) if (payload.templateProfile and payload.templateProfile.chapters) else "None extracted yet"
     
-    if not settings.openai_api_key:
+    api_key = x_openai_api_key or settings.openai_api_key
+    if not api_key:
         questions = [
             {"id": "problem_statement", "label": "What specific problem does your project solve?", "type": "textarea"},
             {"id": "objectives", "label": "What are the primary objectives of the project?", "type": "textarea"}
@@ -341,7 +389,7 @@ Return the output as a JSON object with a key "questions" containing an array of
 Ensure the questions cover the core methodology, architecture/design, implementation details, evaluation/results, and challenges of the project. Do not generate generic questions; tailor them specifically to the project's domain and description."""
 
     try:
-        client = OpenAI(api_key=settings.openai_api_key)
+        client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[

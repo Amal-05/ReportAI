@@ -68,8 +68,13 @@ export function UploadWizard({ projectId, onSuccess }: { projectId?: string; onS
         formData.append("uploads", file);
       }
       const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://reportai-ytsn.onrender.com/api/v1";
+      const headers: Record<string, string> = {};
+      if (process.env.NEXT_PUBLIC_OPENAI_API_KEY) {
+        headers["X-OpenAI-API-Key"] = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+      }
       const res = await fetch(`${API_URL}/templates/learn-public`, {
         method: "POST",
+        headers,
         body: formData,
       });
       if (!res.ok) {

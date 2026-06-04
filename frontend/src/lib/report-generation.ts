@@ -76,11 +76,16 @@ export async function enhanceAnswersWithAI(
 ): Promise<Record<string, string>> {
   const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://reportai-ytsn.onrender.com/api/v1";
   try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (process.env.NEXT_PUBLIC_OPENAI_API_KEY) {
+      headers["X-OpenAI-API-Key"] = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+    }
+
     const response = await fetch(`${API_URL}/generation/enhance-answers-public`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         project: {
           title: project.title,
@@ -118,11 +123,16 @@ export async function generateLatexWithAI(
 ): Promise<string> {
   const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://reportai-ytsn.onrender.com/api/v1";
   try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (process.env.NEXT_PUBLIC_OPENAI_API_KEY) {
+      headers["X-OpenAI-API-Key"] = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+    }
+
     const response = await fetch(`${API_URL}/generation/generate-report-public`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         project: {
           title: project.title,

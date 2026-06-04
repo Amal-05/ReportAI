@@ -53,11 +53,16 @@ export async function generateAIQuestions(
 ): Promise<Question[]> {
   const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://reportai-ytsn.onrender.com/api/v1";
   try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (process.env.NEXT_PUBLIC_OPENAI_API_KEY) {
+      headers["X-OpenAI-API-Key"] = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+    }
+
     const response = await fetch(`${API_URL}/generation/questions-public`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         project,
         templateProfile,
