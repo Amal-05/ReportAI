@@ -357,9 +357,10 @@ Instructions:
 4. Organize the layout elegantly: use subsections, bullet lists (itemize/enumerate), and LaTeX layout wrappers where appropriate.
 5. Include a Table of Contents (\\tableofcontents) and Title Page (\\maketitle).
 6. Do not use manual spacing commands such as \\vspace or \\hspace in titles, chapters, sections, or body content.
-7. Do not use custom list options such as [label=...], [leftmargin=...], or enumitem-specific syntax. Use plain \\begin{{itemize}}, \\begin{{enumerate}}, and \\item only.
-8. Do not include lstlisting, minted, verbatim, raw JSON/code dumps, or unresolved \\ref references unless the referenced label is also defined in the document.
-9. Do NOT wrap the LaTeX output in markdown ticks (e.g. ```latex ... ```). The output must be the raw LaTeX source string directly."""
+7. The \\title{{...}} value must be plain text only. Do not wrap the title in \\textbf, \\large, \\centerline, or any other formatting command.
+8. Do not use custom list options such as [label=...], [leftmargin=...], or enumitem-specific syntax. Use plain \\begin{{itemize}}, \\begin{{enumerate}}, and \\item only.
+9. Do not include lstlisting, minted, verbatim, raw JSON/code dumps, or unresolved \\ref references unless the referenced label is also defined in the document.
+10. Do NOT wrap the LaTeX output in markdown ticks (e.g. ```latex ... ```). The output must be the raw LaTeX source string directly."""
 
     try:
         client, model = get_openai_client_and_model(api_key)
@@ -450,4 +451,3 @@ Ensure the questions cover the core methodology, architecture/design, implementa
             {"id": "problem_statement", "label": "What specific problem does your project solve?", "type": "textarea"},
             {"id": "objectives", "label": "What are the primary objectives of the project?", "type": "textarea"}
         ]}
-

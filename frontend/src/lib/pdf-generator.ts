@@ -69,6 +69,15 @@ function stripLatexCommands(value: string) {
   return text;
 }
 
+function cleanPdfTitle(value: string) {
+  return stripLatexCommands(value)
+    .replace(/\\?textbf\{?/gi, "")
+    .replace(/\\?[a-z]+\*?\{?/gi, "")
+    .replace(/[{}]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function parseBlocks(value: string): RenderBlock[] {
   const itemMarker = "__REPORTAI_LIST_ITEM__";
   const prepared = normalizeLatexText(value)
@@ -122,7 +131,7 @@ export function generateAndDownloadPdf(projectTitle: string, latex: string) {
 
   // 1. Parse Title, Author, Chapters, and Sections
   const titleContent = extractCommandContent(latex, "title");
-  const parsedTitle = stripLatexCommands(titleContent || projectTitle) || projectTitle;
+  const parsedTitle = cleanPdfTitle(titleContent || projectTitle) || cleanPdfTitle(projectTitle) || "Project Report";
 
   // Extract Chapters
   const chapterRegex = /\\chapter\*?\{([^}]+)\}([\s\S]*?)(?=\\chapter\*?\{|\s*\\bibliographystyle|\s*\\end\{document\})/g;
