@@ -76,54 +76,35 @@ function parseBlocks(value: string): RenderBlock[] {
     .replace(/\\begin\{(?:lstlisting|verbatim|minted)\}(?:\[[^\]]*\])?|\\end\{(?:lstlisting|verbatim|minted)\}/g, "\n")
     .replace(/\[[^\]]*(?:label|leftmargin|language|caption)\s*=[^\]]*\]\s*/gi, "")
     .replace(/\\item(?:\[[^\]]*\])?/g, `\n${itemMarker} `)
-    .replace(/(^|\s)(?:[*-]|\d+[.)])\s+(?=[A-Z0-9])/g, `\n${itemMarker} `)
+    .replace(/(?:^|\s)(?:[*-]|\d+[.)])\s+(?=[A-Z0-9])/g, `\n${itemMarker} `)
     .replace(/\\\\|\\newline/g, "\n");
 
   const blocks: RenderBlock[] = [];
-  let currentParagraph: string[] = [];
-  let currentListItem: string[] | null = null;
 
-  const flushParagraph = () => {
-    const text = stripLatexCommands(currentParagraph.join(" "));
-    if (text) blocks.push({ type: "paragraph", text });
-    currentParagraph = [];
+  const pushParagraphs = (text: string) => {
+    text
+      .split(/\n{2,}/)
+      .map((paragraph) => stripLatexCommands(paragraph.replace(/\n+/g, " ")))
+      .filter(Boolean)
+      .forEach((paragraph) => blocks.push({ type: "paragraph", text: paragraph }));
   };
 
-  const flushListItem = () => {
-    if (!currentListItem) return;
-    const text = stripLatexCommands(currentListItem.join(" "));
-    if (text) blocks.push({ type: "list-item", text });
-    currentListItem = null;
+  if (!prepared.includes(itemMarker)) {
+    pushParagraphs(prepared);
+    return blocks;
+  }
+
+  const parts = prepared.split(itemMarker);
+  pushParagraphs(parts[0]);
+
+  for (const part of parts.slice(1)) {
+    const [rawItem = "", ...afterItem] = part.split(/\n{2,}/);
+    const itemText = stripLatexCommands(rawItem.replace(/\n+/g, " "));
+    if (itemText) blocks.push({ type: "list-item", text: itemText });
+    if (afterItem.length > 0) {
+      pushParagraphs(afterItem.join("\n\n"));
+    }
   };
-
-  prepared.split("\n").forEach((rawLine) => {
-    const line = rawLine.trim();
-
-    if (!line) {
-      flushListItem();
-      flushParagraph();
-      return;
-    }
-
-    const markdownListMatch = line.match(/^(?:[*-]|\d+[.)])\s+(.+)$/);
-
-    if (line.startsWith(itemMarker) || markdownListMatch) {
-      flushListItem();
-      flushParagraph();
-      currentListItem = [line.startsWith(itemMarker) ? line.slice(itemMarker.length).trim() : markdownListMatch?.[1] ?? ""];
-      return;
-    }
-
-    if (currentListItem) {
-      currentListItem.push(line);
-      return;
-    }
-
-    currentParagraph.push(line);
-  });
-
-  flushListItem();
-  flushParagraph();
   return blocks;
 }
 
@@ -349,8 +330,9 @@ export function generateAndDownloadPdf(projectTitle: string, latex: string) {
       
       const blocks = parseBlocks(sec.body);
       blocks.forEach((block) => {
-        const left = block.type === "list-item" ? margin + 7 : margin;
-        const width = block.type === "list-item" ? contentWidth - 7 : contentWidth;
+        if (block.type === "list-item") y += 1.5;
+        const left = block.type === "list-item" ? margin + 10 : margin;
+        const width = block.type === "list-item" ? contentWidth - 10 : contentWidth;
         const wrappedLines = doc.splitTextToSize(block.text, width);
         
         wrappedLines.forEach((line: string, lineIndex: number) => {
@@ -373,13 +355,13 @@ export function generateAndDownloadPdf(projectTitle: string, latex: string) {
           }
           if (block.type === "list-item" && lineIndex === 0) {
             doc.setFillColor(71, 85, 105);
-            doc.circle(margin + 2, y - 1.4, 0.75, "F");
+            doc.circle(margin + 4, y - 1.5, 1, "F");
           }
           doc.text(line, left, y);
           y += 6.5; // Line spacing (1.5x equivalent)
         });
         
-        y += block.type === "list-item" ? 2 : 4; // Spacing between blocks
+        y += block.type === "list-item" ? 4 : 4; // Spacing between blocks
       });
 
       y += 6; // Spacing after section
