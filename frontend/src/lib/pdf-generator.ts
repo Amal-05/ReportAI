@@ -167,6 +167,18 @@ export function generateAndDownloadPdf(projectTitle: string, latex: string) {
       .replace(/\\\\|\\newline/g, "\n")
       .trim();
 
+    // Extract any introductory text before the first section
+    const firstSectionIndex = cleanContent.indexOf("\\section{");
+    if (firstSectionIndex > 0) {
+      const introText = cleanContent.substring(0, firstSectionIndex).trim();
+      if (introText) {
+        sections.push({
+          title: "Introduction",
+          body: introText,
+        });
+      }
+    }
+
     while ((secMatch = sectionRegex.exec(cleanContent)) !== null) {
       sections.push({
         title: secMatch[1].trim(),
@@ -214,6 +226,9 @@ export function generateAndDownloadPdf(projectTitle: string, latex: string) {
         .replace(/\\ref\{[^}]+\}/g, "[Fig]")
         .replace(/\\bibliographystyle[\s\S]*/g, "")
         .replace(/\\bibliography[\s\S]*/g, "")
+        .replace(/\\(textbf|textit|texttt|emph|url|href)\{([^}]+)\}/g, "$2") // clean common formatting commands
+        .replace(/\\[a-zA-Z]+\{([^}]+)\}/g, "$1") // general clean of other commands
+        .replace(/[\{\}]/g, "") // strip any stray braces
         .trim();
 
       // Split body into lines and wrap
