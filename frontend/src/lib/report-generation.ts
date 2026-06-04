@@ -119,7 +119,8 @@ export async function enhanceAnswersWithAI(
 export async function generateLatexWithAI(
   project: Project,
   answers: Record<string, string>,
-  questions: Question[]
+  questions: Question[],
+  templateProfile?: { chapters?: string[]; citation?: string; font?: string; spacing?: string }
 ): Promise<string> {
   const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://reportai-ytsn.onrender.com/api/v1";
   try {
@@ -141,6 +142,7 @@ export async function generateLatexWithAI(
         },
         answers,
         questions: questions.map((q) => ({ id: q.id, label: q.label, type: q.type })),
+        templateProfile,
       }),
     });
 
@@ -155,6 +157,7 @@ export async function generateLatexWithAI(
     return generateLatex(project, answers);
   }
 }
+
 
 export function analyzeQuality(latex: string, referenceCount: number): QualityScore {
   const wordCount = latex.split(/\s+/).filter(Boolean).length;

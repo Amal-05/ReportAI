@@ -42,6 +42,7 @@ class GenerateReportRequest(BaseModel):
     project: ProjectInfo
     answers: dict[str, str]
     questions: list[QuestionInfo]
+    templateProfile: TemplateProfileInfo | None = None
 
 
 class TemplateProfileInfo(BaseModel):
@@ -247,6 +248,8 @@ async def generate_report_public(
             "Conclusion",
             "Future Scope",
         ]
+        if payload.templateProfile and payload.templateProfile.chapters:
+            report_sections = payload.templateProfile.chapters
         
         # Map specific question keys/patterns to LaTeX chapters to avoid duplicate content on all pages
         chapter_mappings = {
@@ -271,13 +274,22 @@ async def generate_report_public(
             # Gather answers belonging to this section
             section_keys = chapter_mappings.get(section, [])
             section_answers = []
-            for key in section_keys:
+            
+            # For custom sections, attempt dynamic match by substring mapping
+            if not section_keys:
+                normalized_section = section.lower().replace(" ", "_")
                 for ans_key, ans_val in payload.answers.items():
                     if ans_val and not is_nil_answer(ans_val):
-                        # Match if ans_key contains the mapped key or vice versa
-                        if ans_key == key or key in ans_key or ans_key in key:
+                        if normalized_section in ans_key or ans_key in normalized_section:
                             clean_key = ans_key.replace("_", " ").title()
                             section_answers.append(f"\\textbf{{{clean_key}}}: {ans_val}")
+            else:
+                for key in section_keys:
+                    for ans_key, ans_val in payload.answers.items():
+                        if ans_val and not is_nil_answer(ans_val):
+                            if ans_key == key or key in ans_key or ans_key in key:
+                                clean_key = ans_key.replace("_", " ").title()
+                                section_answers.append(f"\\textbf{{{clean_key}}}: {ans_val}")
             
             # Set specific descriptive paragraphs per section to look premium and distinct
             if section == "Abstract":
@@ -298,13 +310,15 @@ async def generate_report_public(
             elif section == "Implementation":
                 sec_tex += f"This chapter documents the environment setup, API services, libraries, hardware configurations, and code compilation details executed to instantiate the functional prototype of \\textbf{{{payload.project.title}}}.\n\n"
             elif section == "Testing":
-                sec_tex += f"Validation and verification splits were executed to confirm the operational capability of \\textbf{{{payload.project.title}}}. This includes modular unit tests and systemic integration audits.\n\n"
+                sec_tex += f"Validation and verification tests were executed to confirm the operational capability of \\textbf{{{payload.project.title}}}. This includes modular unit tests and systemic integration audits.\n\n"
             elif section == "Results":
                 sec_tex += f"The performance outcomes, evaluation metrics, comparative tables, and data logs achieved during research trials of \\textbf{{{payload.project.title}}} are presented and analyzed in this section.\n\n"
             elif section == "Conclusion":
-                sec_tex += f"This chapter concludes the research findings, achievements, and structural lessons learned during the development of \\textbf{{{payload.project.title}}}.\n\n"
+                sec_tex += f"This chapter concludes the research findings, achievements, and lessons learned during the development of \\textbf{{{payload.project.title}}}.\n\n"
             elif section == "Future Scope":
                 sec_tex += f"Potential future enhancements, scalability optimizations, and cloud deployment pipelines proposed for \\textbf{{{payload.project.title}}} are outlined in this section.\n\n"
+            else:
+                sec_tex += f"This chapter details the specific research, design paradigms, and analytical evaluations concerning the {section.title()} phase of \\textbf{{{payload.project.title}}}.\n\n"
 
             if section_answers:
                 sec_tex += "\\section{Project Evidence}\n"
@@ -317,13 +331,32 @@ async def generate_report_public(
         
         sections_joined = "\n\n".join(sections_tex)
 
+        spacing_tex = "\\onehalfspacing"
+        if payload.templateProfile and payload.templateProfile.spacing:
+            try:
+                sp = float(payload.templateProfile.spacing)
+                if sp >= 1.8:
+                    spacing_tex = "\\doublespacing"
+                elif sp < 1.3:
+                    spacing_tex = "\\singlespacing"
+            except Exception:
+                pass
+
+        bib_style = "IEEEtran"
+        if payload.templateProfile and payload.templateProfile.citation:
+            cit = payload.templateProfile.citation.lower()
+            if "apa" in cit:
+                bib_style = "apalike"
+            elif "harvard" in cit:
+                bib_style = "apalike"
+
         return f"""% Compiled in local offline fallback mode.
 % To enable high-quality dynamic academic report generation, please configure the NEXT_PUBLIC_OPENAI_API_KEY environment variable.
 \\documentclass[12pt,a4paper]{{report}}
 \\usepackage[margin=1in]{{geometry}}
 \\usepackage{{setspace}}
 \\usepackage{{hyperref}}
-\\onehalfspacing
+{spacing_tex}
 \\title{{{payload.project.title}}}
 \\author{{Generated by ReportAI}}
 \\date{{\\today}}
@@ -333,13 +366,39 @@ async def generate_report_public(
 
 {sections_joined}
 
-\\bibliographystyle{{IEEEtran}}
+\\bibliographystyle{{{bib_style}}}
 \\bibliography{{references}}
 \\end{{document}}"""
 
     api_key = x_openai_api_key or settings.openai_api_key
     if not api_key:
         return {"latex": get_fallback_latex()}
+
+    chapters_instruction = ""
+    if payload.templateProfile and payload.templateProfile.chapters:
+        chapters_list_str = ", ".join(payload.templateProfile.chapters)
+        chapters_instruction = f"Use the following exact chapters in this exact order: {chapters_list_str}."
+    else:
+        chapters_instruction = "Use standard report chapters: Abstract, Introduction, Literature Review, Methodology, System Design, Implementation, Testing, Results, and Conclusion."
+
+    style_instructions = []
+    if payload.templateProfile:
+        if payload.templateProfile.citation:
+            style_instructions.append(f"Follow the {payload.templateProfile.citation} citation style guidelines.")
+        if payload.templateProfile.font:
+            style_instructions.append(f"Format text elements to align with the {payload.templateProfile.font} font style guidelines.")
+        if payload.templateProfile.spacing:
+            try:
+                spacing_val = float(payload.templateProfile.spacing)
+                if spacing_val >= 1.8:
+                    style_instructions.append("Use double line spacing (include \\doublespacing from the setspace package).")
+                elif spacing_val >= 1.3:
+                    style_instructions.append("Use one-half line spacing (include \\onehalfspacing from the setspace package).")
+                else:
+                    style_instructions.append("Use single line spacing (include \\singlespacing from the setspace package).")
+            except Exception:
+                pass
+    style_inst_str = "\n".join(f"- {inst}" for inst in style_instructions) if style_instructions else ""
 
     prompt = f"""You are a world-class academic LaTeX writing system. Write a comprehensive, highly detailed academic project report in LaTeX for the following project:
 
@@ -350,9 +409,15 @@ Description: {payload.project.description}
 Student Questionnaire Details:
 {answers_str}
 
+Structural Chapters:
+{chapters_instruction}
+
+Styling Guidelines:
+{style_inst_str}
+
 Instructions:
 1. Generate a complete, compiler-ready LaTeX document starting with \\documentclass[12pt,a4paper]{{report}} and ending with \\end{{document}}.
-2. Use standard report chapters: Abstract, Introduction, Literature Review, Methodology, System Design, Implementation, Testing, Results, and Conclusion.
+2. Organize the LaTeX layout using the requested structural chapters.
 3. Enhance all questionnaire details and write them contextually into highly detailed paragraphs (using academic tone, formal vocabulary, and scientific formatting).
 4. Organize the layout elegantly: use subsections, bullet lists (itemize/enumerate), and LaTeX layout wrappers where appropriate.
 5. Include a Table of Contents (\\tableofcontents) and Title Page (\\maketitle).

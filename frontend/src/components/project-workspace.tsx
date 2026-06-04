@@ -153,7 +153,19 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     setIsSaving(true);
     setMessage("AI is analyzing your details and dynamically drafting your LaTeX report...");
     try {
-      const nextLatex = await generateLatexWithAI(project, answers, questions);
+      let templateProfile: any = undefined;
+      try {
+        const templatesSnap = await getDocs(
+          query(collection(getFirebaseDb(), "users", user.uid, "projects", project.id, "templates"), orderBy("created_at", "desc"), limit(1))
+        );
+        if (!templatesSnap.empty) {
+          templateProfile = templatesSnap.docs[0].data().profile;
+        }
+      } catch (err) {
+        console.warn("Could not load template profile for AI report generation:", err);
+      }
+
+      const nextLatex = await generateLatexWithAI(project, answers, questions, templateProfile);
       const nextQuality = analyzeQuality(nextLatex, 0);
       await saveReportDraft(user.uid, project.id, nextLatex, nextQuality);
       setLatex(nextLatex);
@@ -166,6 +178,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
       setIsSaving(false);
     }
   }
+
 
   async function downloadPdf() {
     if (!user || !project || !latex) return;
