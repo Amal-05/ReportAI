@@ -68,6 +68,22 @@ async def learn_template(
     return template
 
 
+def get_openai_client_and_model(api_key: str):
+    from openai import OpenAI
+    base_url = None
+    model = "gpt-4o-mini"
+    
+    if api_key.startswith("AIzaSy"):
+        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        model = "gemini-1.5-flash"
+    elif api_key.startswith("gsk_"):
+        base_url = "https://api.groq.com/openai/v1"
+        model = "llama-3.3-70b-versatile"
+        
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    return client, model
+
+
 @router.post("/learn-public", status_code=status.HTTP_200_OK)
 async def learn_template_public(
     uploads: list[UploadFile] = UploadFileField(...),
@@ -82,7 +98,6 @@ async def learn_template_public(
 
     full_text = "\n\n".join(doc.text for doc in documents)[:15000]
     
-    from openai import OpenAI
     from app.core.config import settings
     from app.services.template_learning import TemplateLearningService
     
@@ -106,7 +121,7 @@ async def learn_template_public(
             "questions": questions
         }
 
-    client = OpenAI(api_key=api_key)
+    client, model = get_openai_client_and_model(api_key)
     prompt = f"""Analyze the following university report guidelines / sample document text and learn the required structure and styling parameters.
     
 Guidelines Text:
@@ -126,7 +141,7 @@ Return ONLY the raw JSON object. No explanations, no markdown styling."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,
             messages=[
                 {"role": "system", "content": "You are a university report analysis bot. You must extract report parameters and return only valid JSON output."},
                 {"role": "user", "content": prompt}

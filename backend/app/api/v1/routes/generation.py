@@ -111,6 +111,22 @@ def generate_content(
     return rows
 
 
+def get_openai_client_and_model(api_key: str):
+    from openai import OpenAI
+    base_url = None
+    model = "gpt-4o-mini"
+    
+    if api_key.startswith("AIzaSy"):
+        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        model = "gemini-1.5-flash"
+    elif api_key.startswith("gsk_"):
+        base_url = "https://api.groq.com/openai/v1"
+        model = "llama-3.3-70b-versatile"
+        
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    return client, model
+
+
 @router.post("/enhance-answers-public")
 async def enhance_answers_public(
     payload: EnhanceAnswersRequest,
@@ -161,9 +177,9 @@ Instructions:
 3. Return the output strictly as a JSON object where the keys are the original question IDs (e.g. "problem_statement", "tech_stack") and the values are the rewritten academic paragraphs. Do not return any other text, markdown formatting, or explain anything."""
 
     try:
-        client = OpenAI(api_key=api_key)
+        client, model = get_openai_client_and_model(api_key)
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,
             messages=[
                 {
                     "role": "system",
@@ -343,9 +359,9 @@ Instructions:
 6. Do NOT wrap the LaTeX output in markdown ticks (e.g. ```latex ... ```). The output must be the raw LaTeX source string directly."""
 
     try:
-        client = OpenAI(api_key=api_key)
+        client, model = get_openai_client_and_model(api_key)
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,
             messages=[
                 {
                     "role": "system",
@@ -407,9 +423,9 @@ Return the output as a JSON object with a key "questions" containing an array of
 Ensure the questions cover the core methodology, architecture/design, implementation details, evaluation/results, and challenges of the project. Do not generate generic questions; tailor them specifically to the project's domain and description."""
 
     try:
-        client = OpenAI(api_key=api_key)
+        client, model = get_openai_client_and_model(api_key)
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,
             messages=[
                 {
                     "role": "system",
