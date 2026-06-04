@@ -269,15 +269,33 @@ async def generate_report_public(
                 sec_tex += f"{payload.project.description}\n\n"
             elif section == "Acknowledgement":
                 sec_tex += f"The authors would like to express their sincere gratitude to project advisors, classmates, and all contributors who provided feedback and assistance during the development of \\textbf{{{payload.project.title}}}.\n\n"
-            else:
-                sec_tex += f"This chapter discusses the technical implementation details, designs, and analysis associated with the {section.lower()} phase of the \\textbf{{{payload.project.title}}} project.\n\n"
+            elif section == "Introduction":
+                sec_tex += f"The primary focus of this study is the exploration and development of \\textbf{{{payload.project.title}}}. This chapter details the foundational concepts, background, objectives, and project boundaries defined for this academic research.\n\n"
+            elif section == "Literature Review":
+                sec_tex += f"An analysis of prior studies and state-of-the-art developments in the field of {payload.project.domain} was conducted. This chapter reviews the academic theories, methodologies, and frameworks relevant to \\textbf{{{payload.project.title}}}.\n\n"
+            elif section == "System Analysis":
+                sec_tex += f"This chapter outlines the requirements analysis, functional specifications, feasibility study, and data flow modeling executed to formulate the architecture of \\textbf{{{payload.project.title}}}.\n\n"
+            elif section == "System Design":
+                sec_tex += f"The system design presents the structural layout, component boundaries, database schemas, and architectural design patterns selected to construct \\textbf{{{payload.project.title}}}.\n\n"
+            elif section == "Methodology":
+                sec_tex += f"The core methodology describes the theoretical algorithms, processing pipelines, testing models, and experimental layouts configured for the validation of \\textbf{{{payload.project.title}}}.\n\n"
+            elif section == "Implementation":
+                sec_tex += f"This chapter documents the environment setup, API services, libraries, hardware configurations, and code compilation details executed to instantiate the functional prototype of \\textbf{{{payload.project.title}}}.\n\n"
+            elif section == "Testing":
+                sec_tex += f"Validation and verification splits were executed to confirm the operational capability of \\textbf{{{payload.project.title}}}. This includes modular unit tests and systemic integration audits.\n\n"
+            elif section == "Results":
+                sec_tex += f"The performance outcomes, evaluation metrics, comparative tables, and data logs achieved during research trials of \\textbf{{{payload.project.title}}} are presented and analyzed in this section.\n\n"
+            elif section == "Conclusion":
+                sec_tex += f"This chapter concludes the research findings, achievements, and structural lessons learned during the development of \\textbf{{{payload.project.title}}}.\n\n"
+            elif section == "Future Scope":
+                sec_tex += f"Potential future enhancements, scalability optimizations, and cloud deployment pipelines proposed for \\textbf{{{payload.project.title}}} are outlined in this section.\n\n"
 
             if section_answers:
                 sec_tex += "\\section{Project Evidence}\n"
                 sec_tex += "\\\\\n".join(section_answers) + "\n"
             else:
                 if section not in ["Abstract", "Acknowledgement"]:
-                    sec_tex += f"Detailed descriptions and research results for the {section.lower()} are currently being documented.\n"
+                    sec_tex += f"Further investigations and data compilation for the {section.lower()} phase are ongoing.\n"
             
             sections_tex.append(sec_tex)
         
