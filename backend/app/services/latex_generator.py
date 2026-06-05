@@ -1,7 +1,6 @@
 class LaTeXGenerator:
-    def render_report(self, project: dict, sections: list[dict], references_bib: str = "") -> str:
-        body = "\n\n".join(section["content"] for section in sections)
-        return rf"""
+    def render_report(self, project: dict, sections: list[dict], references_bib: str = "") -> tuple[str, dict[int, str]]:
+        header = rf"""
 \documentclass[12pt,a4paper]{{report}}
 \usepackage[margin=1in]{{geometry}}
 \usepackage{{setspace}}
@@ -31,13 +30,32 @@ The author expresses sincere gratitude to the institution, guide, and collaborat
 \listoftables
 \clearpage
 \pagenumbering{{arabic}}
-
-{body}
-
+"""
+        header = header.strip()
+        line_map = {}
+        current_line = header.count("\n") + 1
+        
+        body_parts = []
+        for section in sections:
+            content = section["content"]
+            # Add a small buffer/newline between sections
+            part = f"\n\n{content}"
+            start_line = current_line + 2 # +2 for the newlines
+            end_line = start_line + content.count("\n")
+            
+            for line in range(start_line, end_line + 1):
+                line_map[line] = section.get("id", section["section"])
+            
+            body_parts.append(content)
+            current_line = end_line
+            
+        footer = rf"""
 \bibliographystyle{{IEEEtran}}
 \bibliography{{references}}
 \end{{document}}
-""".strip()
+"""
+        full_source = f"{header}\n\n" + "\n\n".join(body_parts) + f"\n\n{footer.strip()}"
+        return full_source, line_map
 
     def render_references(self, entries: list[str]) -> str:
         return "\n\n".join(entries)

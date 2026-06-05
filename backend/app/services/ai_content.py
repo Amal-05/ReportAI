@@ -70,3 +70,28 @@ class AIContentService:
             f"implementation details, results, and citations. Key submitted project details: {answers}."
         )
         return {"section": section, "content": content, "meta": {"mode": "offline-fallback"}}
+
+    def suggest_fix(self, error_message: str, source_fragment: str) -> str | None:
+        if self.client is None:
+            # Basic heuristic fix for common errors
+            if "_" in source_fragment and r"\_" not in source_fragment:
+                return source_fragment.replace("_", r"\_")
+            if "%" in source_fragment and r"\%" not in source_fragment:
+                return source_fragment.replace("%", r"\%")
+            return None
+
+        prompt = f"""
+        Fix this LaTeX error: {error_message}
+        Problematic line: {source_fragment}
+        
+        Return ONLY the corrected line. No explanation.
+        """
+        try:
+            response = self.client.chat.completions.create(
+                model=settings.openai_model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=200,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception:
+            return None

@@ -20,3 +20,18 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   return response.json() as Promise<T>;
 }
+
+export async function createReport(projectId: string): Promise<any> {
+  return api(`/reports/project/${projectId}/latex`, { method: "POST" });
+}
+
+export async function compileReport(reportId: string): Promise<any> {
+  return api(`/reports/${reportId}/compile`, { method: "POST" });
+}
+
+export async function applyFix(reportId: string, sectionId: string, oldFragment: string, newFragment: string): Promise<any> {
+  return api(`/reports/${reportId}/fix?section_id=${sectionId}`, {
+    method: "POST",
+    body: JSON.stringify({ old_fragment: oldFragment, new_fragment: newFragment }),
+  });
+}

@@ -39,7 +39,7 @@ def generate_latex_report(
     sections = list(db.scalars(select(GeneratedContent).where(GeneratedContent.project_id == project_id)))
     references = list(db.scalars(select(Reference).where(Reference.project_id == project_id)))
     generator = LaTeXGenerator()
-    latex_source = generator.render_report(
+    latex_source, _ = generator.render_report(
         {"title": project.title, "domain": project.domain},
         [{"section": section.section, "content": section.content} for section in sections],
         generator.render_references([reference.bibtex for reference in references]),
@@ -69,17 +69,57 @@ def compile_report(
     sections = list(db.scalars(select(GeneratedContent).where(GeneratedContent.project_id == project.id)))
     references = list(db.scalars(select(Reference).where(Reference.project_id == project.id)))
     generator = LaTeXGenerator()
-    latex_source = generator.render_report(
+    latex_source, line_map = generator.render_report(
         {"title": project.title, "domain": project.domain},
-        [{"section": section.section, "content": section.content} for section in sections],
+        [{"id": str(section.id), "section": section.section, "content": section.content} for section in sections],
     )
     references_bib = generator.render_references([reference.bibtex for reference in references])
-    ok, pdf, log = PDFCompiler().compile(latex_source, references_bib)
+    ok, pdf, log, errors = PDFCompiler().compile(latex_source, references_bib)
+    
+    # Enrich errors with section IDs and suggested fixes
+    from app.services.ai_content import AIContentService
+    ai_service = AIContentService()
+    enriched_errors = []
+    for err in errors:
+        if err["line"] in line_map:
+            err["section_id"] = line_map[err["line"]]
+        
+        if not ok and err.get("source_fragment"):
+            err["suggested_fix"] = ai_service.suggest_fix(err["message"], err["source_fragment"])
+        
+        enriched_errors.append(err)
+
     report.compile_log = log
     report.status = "compiled" if ok else "compile_failed"
     if ok and pdf:
         report.pdf_storage_key = StorageService().put_bytes(pdf, "report.pdf", "application/pdf")
     report.quality_feedback = QualityAnalyzer().score(latex_source, [r.__dict__ for r in references])
     report.quality_score = report.quality_feedback["overall"]
-    db.commit()
-    return CompileResult(ok=ok, log=log, pdf_storage_key=report.pdf_storage_key)
+@router.post("/{report_id}/fix")
+def apply_latex_fix(
+    report_id: UUID,
+    section_id: UUID,
+    old_fragment: str,
+    new_fragment: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    report = db.get(Report, report_id)
+    if not report:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Report not found")
+    
+    get_owned_project(report.project_id, user, db)
+    
+    content = db.get(GeneratedContent, section_id)
+    if not content:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Section content not found")
+    
+    if old_fragment in content.content:
+        content.content = content.content.replace(old_fragment, new_fragment)
+        db.commit()
+        return {"ok": True}
+    
+    from fastapi import HTTPException
+    raise HTTPException(status_code=400, detail="Fragment not found in content")

@@ -22,6 +22,9 @@ import type { Question } from "@/lib/questionnaire";
 import type { Project, QualityScore } from "@/lib/types";
 import { generateAndDownloadPdf } from "@/lib/pdf-generator";
 import { FileDown, Settings, Sparkles, Loader2 } from "lucide-react";
+import { LatexErrorPanel } from "@/components/latex-error-panel";
+import { compileReport, createReport } from "@/lib/api";
+import { LaTeXError } from "@/lib/types";
 
 export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const { user, loading, configured } = useAuth();
@@ -34,6 +37,8 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [isGeneratingQuestions, setIsGeneratingQuestions] = useState(false);
+  const [compileErrors, setCompileErrors] = useState<LaTeXError[]>([]);
+  const [activeReportId, setActiveReportId] = useState<string | null>(null);
   const router = useRouter();
 
   async function loadProjectData() {
@@ -204,6 +209,31 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     }
   }
 
+  async function officialCompile() {
+    if (!user || !project) return;
+    setIsSaving(true);
+    setMessage("Connecting to backend TeX compiler for official verification...");
+    setCompileErrors([]);
+    try {
+      const report = await createReport(project.id);
+      setActiveReportId(report.id);
+      const result = await compileReport(report.id);
+      
+      if (result.ok) {
+        setMessage("Official compilation successful! TeX logs verified.");
+        setCompileErrors([]);
+        loadProjectData();
+      } else {
+        setMessage("Backend compilation encountered errors. See the debugger below.");
+        setCompileErrors(result.errors || []);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Backend compilation failed.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function removeProject() {
     if (!user || !project) return;
     await deleteProject(user.uid, project.id);
@@ -239,10 +269,16 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
         <div className="flex gap-2">
           <Button variant="outline" onClick={removeProject}>Delete</Button>
           {latex ? (
-            <Button onClick={downloadPdf} disabled={isSaving} className="bg-accent text-accent-foreground hover:bg-accent/90 flex items-center gap-2 shadow-sm font-semibold">
-              <FileDown className="h-4 w-4" />
-              {isSaving ? "Compiling..." : "Download PDF"}
-            </Button>
+            <div className="flex gap-2">
+              <Button onClick={officialCompile} disabled={isSaving} variant="outline" className="flex items-center gap-2">
+                <RefreshCcw className={`h-4 w-4 ${isSaving ? 'animate-spin' : ''}`} />
+                {isSaving ? "Verifying..." : "Verify & Auto-Fix"}
+              </Button>
+              <Button onClick={downloadPdf} disabled={isSaving} className="bg-accent text-accent-foreground hover:bg-accent/90 flex items-center gap-2 shadow-sm font-semibold">
+                <FileDown className="h-4 w-4" />
+                {isSaving ? "Compiling..." : "Download PDF"}
+              </Button>
+            </div>
           ) : null}
           <Button onClick={generateReport} disabled={isSaving}>{isSaving ? "Working..." : "Generate Report"}</Button>
         </div>
@@ -323,6 +359,15 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
               </CardContent>
             </Card>
           ) : null}
+          {activeReportId && compileErrors.length > 0 && (
+            <LatexErrorPanel 
+              reportId={activeReportId} 
+              errors={compileErrors} 
+              onFixApplied={() => {
+                officialCompile(); // Re-compile after fix
+              }} 
+            />
+          )}
           <QualityPanel score={quality} />
         </div>
         <div className="space-y-5">

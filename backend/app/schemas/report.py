@@ -19,7 +19,17 @@ class ReportRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class LaTeXError(BaseModel):
+    line: int | None
+    message: str
+    context: str | None
+    source_fragment: str | None
+    suggested_fix: str | None
+    section_id: str | None
+
+
 class CompileResult(BaseModel):
     ok: bool
     log: str
     pdf_storage_key: str | None = None
+    errors: list[LaTeXError] = []

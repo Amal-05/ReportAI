@@ -25,7 +25,7 @@ def analyze_project_quality(
     project = get_owned_project(project_id, user, db)
     sections = list(db.scalars(select(GeneratedContent).where(GeneratedContent.project_id == project_id)))
     references = list(db.scalars(select(Reference).where(Reference.project_id == project_id)))
-    latex_source = LaTeXGenerator().render_report(
+    latex_source, _ = LaTeXGenerator().render_report(
         {"title": project.title, "domain": project.domain},
         [{"section": section.section, "content": section.content} for section in sections],
     )
