@@ -33,3 +33,9 @@ class CompileResult(BaseModel):
     log: str
     pdf_storage_key: str | None = None
     errors: list[LaTeXError] = []
+
+
+class LaTeXFixRequest(BaseModel):
+    section_id: UUID
+    old_fragment: str
+    new_fragment: str

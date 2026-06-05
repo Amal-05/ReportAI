@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File as UploadFileField, UploadFile, sta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.ai_utils import get_openai_client_and_model
 from app.api.deps import get_current_user, get_owned_project
 from app.db.session import get_db
 from app.models.file import File
@@ -66,22 +67,6 @@ async def learn_template(
     db.commit()
     db.refresh(template)
     return template
-
-
-def get_openai_client_and_model(api_key: str):
-    from openai import OpenAI
-    base_url = None
-    model = "gpt-4o-mini"
-    
-    if api_key.startswith("AIzaSy"):
-        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-        model = "gemini-2.5-flash"
-    elif api_key.startswith("gsk_"):
-        base_url = "https://api.groq.com/openai/v1"
-        model = "llama-3.3-70b-versatile"
-        
-    client = OpenAI(api_key=api_key, base_url=base_url)
-    return client, model
 
 
 @router.post("/learn-public", status_code=status.HTTP_200_OK)

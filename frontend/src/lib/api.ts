@@ -30,8 +30,8 @@ export async function compileReport(reportId: string): Promise<any> {
 }
 
 export async function applyFix(reportId: string, sectionId: string, oldFragment: string, newFragment: string): Promise<any> {
-  return api(`/reports/${reportId}/fix?section_id=${sectionId}`, {
+  return api(`/reports/${reportId}/fix`, {
     method: "POST",
-    body: JSON.stringify({ old_fragment: oldFragment, new_fragment: newFragment }),
+    body: JSON.stringify({ section_id: sectionId, old_fragment: oldFragment, new_fragment: newFragment }),
   });
 }

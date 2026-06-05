@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from openai import OpenAI
 
 from app.core.config import settings
+from app.core.ai_utils import get_openai_client_and_model
 from app.api.deps import get_current_user, get_owned_project
 from app.db.session import get_db
 from app.models.content import GeneratedContent
@@ -38,18 +39,18 @@ class EnhanceAnswersRequest(BaseModel):
     questions: list[QuestionInfo]
 
 
-class GenerateReportRequest(BaseModel):
-    project: ProjectInfo
-    answers: dict[str, str]
-    questions: list[QuestionInfo]
-    templateProfile: TemplateProfileInfo | None = None
-
-
 class TemplateProfileInfo(BaseModel):
     chapters: list[str] | None = None
     citation: str | None = None
     font: str | None = None
     spacing: str | None = None
+
+
+class GenerateReportRequest(BaseModel):
+    project: ProjectInfo
+    answers: dict[str, str]
+    questions: list[QuestionInfo]
+    templateProfile: TemplateProfileInfo | None = None
 
 
 class GenerateQuestionsRequest(BaseModel):
@@ -110,22 +111,6 @@ def generate_content(
     for row in rows:
         db.refresh(row)
     return rows
-
-
-def get_openai_client_and_model(api_key: str):
-    from openai import OpenAI
-    base_url = None
-    model = "gpt-4o-mini"
-    
-    if api_key.startswith("AIzaSy"):
-        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-        model = "gemini-2.5-flash"
-    elif api_key.startswith("gsk_"):
-        base_url = "https://api.groq.com/openai/v1"
-        model = "llama-3.3-70b-versatile"
-        
-    client = OpenAI(api_key=api_key, base_url=base_url)
-    return client, model
 
 
 @router.post("/enhance-answers-public")

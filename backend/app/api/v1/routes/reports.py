@@ -10,7 +10,7 @@ from app.models.content import GeneratedContent
 from app.models.reference import Reference
 from app.models.report import Report
 from app.models.user import User
-from app.schemas.report import CompileResult, ReportRead
+from app.schemas.report import CompileResult, LaTeXError, LaTeXFixRequest, ReportRead
 from app.services.latex_generator import LaTeXGenerator
 from app.services.pdf_compiler import PDFCompiler
 from app.services.quality_analyzer import QualityAnalyzer
@@ -95,12 +95,20 @@ def compile_report(
         report.pdf_storage_key = StorageService().put_bytes(pdf, "report.pdf", "application/pdf")
     report.quality_feedback = QualityAnalyzer().score(latex_source, [r.__dict__ for r in references])
     report.quality_score = report.quality_feedback["overall"]
+    db.commit()
+    db.refresh(report)
+    return CompileResult(
+        ok=ok,
+        log=log,
+        pdf_storage_key=report.pdf_storage_key,
+        errors=[LaTeXError(**err) for err in enriched_errors],
+    )
+
+
 @router.post("/{report_id}/fix")
 def apply_latex_fix(
     report_id: UUID,
-    section_id: UUID,
-    old_fragment: str,
-    new_fragment: str,
+    payload: LaTeXFixRequest,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -108,18 +116,18 @@ def apply_latex_fix(
     if not report:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Report not found")
-    
+
     get_owned_project(report.project_id, user, db)
-    
-    content = db.get(GeneratedContent, section_id)
+
+    content = db.get(GeneratedContent, payload.section_id)
     if not content:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Section content not found")
-    
-    if old_fragment in content.content:
-        content.content = content.content.replace(old_fragment, new_fragment)
+
+    if payload.old_fragment in content.content:
+        content.content = content.content.replace(payload.old_fragment, payload.new_fragment)
         db.commit()
         return {"ok": True}
-    
+
     from fastapi import HTTPException
     raise HTTPException(status_code=400, detail="Fragment not found in content")
