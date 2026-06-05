@@ -20,7 +20,8 @@ import { getFirebaseAuth } from "@/lib/firebase";
 import { projectsQuery, getUserProfile, saveUserProfile, uploadAvatar } from "@/lib/firestore";
 import type { Project, QualityScore } from "@/lib/types";
 import { updateProfile, updateEmail } from "firebase/auth";
-import { Camera, User, Mail, Building2, GraduationCap, Briefcase, Upload, Loader2 } from "lucide-react";
+import { Camera, User, Mail, Building2, GraduationCap, Briefcase, Upload, Loader2, Sun, Moon, Palette } from "lucide-react";
+
 
 
 function SettingsView({ user }: { user: any }) {
@@ -28,9 +29,19 @@ function SettingsView({ user }: { user: any }) {
   const [isSaved, setIsSaved] = useState(false);
   const router = useRouter();
 
+  // Theme states
+  const [themeMode, setThemeMode] = useState<"light" | "dark">("light");
+  const [accentTheme, setAccentTheme] = useState<"ocean" | "emerald" | "royal">("ocean");
+
   useEffect(() => {
     const savedKey = localStorage.getItem("reportai_custom_api_key") || "";
     setApiKey(savedKey);
+
+    // Load theme settings
+    const savedTheme = localStorage.getItem("reportai_theme") || "light";
+    const savedAccent = localStorage.getItem("reportai_accent") || "ocean";
+    setThemeMode(savedTheme as "light" | "dark");
+    setAccentTheme(savedAccent as "ocean" | "emerald" | "royal");
   }, []);
 
   const handleSaveKey = () => {
@@ -49,8 +60,116 @@ function SettingsView({ user }: { user: any }) {
     }
   };
 
+  const changeThemeMode = (mode: "light" | "dark") => {
+    setThemeMode(mode);
+    localStorage.setItem("reportai_theme", mode);
+    if (mode === "dark") {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+  };
+
+  const changeAccentTheme = (accent: "ocean" | "emerald" | "royal") => {
+    setAccentTheme(accent);
+    localStorage.setItem("reportai_accent", accent);
+    
+    // Remove existing accent classes
+    document.documentElement.classList.remove("theme-emerald", "theme-royal");
+    
+    // Add new accent class
+    if (accent === "emerald") {
+      document.documentElement.classList.add("theme-emerald");
+    } else if (accent === "royal") {
+      document.documentElement.classList.add("theme-royal");
+    }
+  };
+
   return (
     <div className="space-y-6">
+      <Card className="border border-border bg-card shadow-md">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Palette className="h-5 w-5 text-primary" /> Theme & Appearance
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Customize the platform's visual appearance and color accents.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Light/Dark Toggle */}
+          <div className="space-y-2.5">
+            <label className="text-sm font-semibold text-muted-foreground block uppercase tracking-wider">Interface Mode</label>
+            <div className="grid grid-cols-2 gap-4 max-w-md">
+              <button
+                type="button"
+                onClick={() => changeThemeMode("light")}
+                className={`flex items-center justify-center gap-2.5 rounded-lg border-2 p-3.5 transition-all text-sm font-medium ${
+                  themeMode === "light"
+                    ? "border-primary bg-primary/5 text-primary shadow-sm"
+                    : "border-border bg-card hover:bg-muted text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Sun className="h-4.5 w-4.5" /> Light Mode
+              </button>
+              <button
+                type="button"
+                onClick={() => changeThemeMode("dark")}
+                className={`flex items-center justify-center gap-2.5 rounded-lg border-2 p-3.5 transition-all text-sm font-medium ${
+                  themeMode === "dark"
+                    ? "border-primary bg-primary/5 text-primary shadow-sm"
+                    : "border-border bg-card hover:bg-muted text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Moon className="h-4.5 w-4.5" /> Dark Mode
+              </button>
+            </div>
+          </div>
+
+          {/* Accent Color Palette Toggle */}
+          <div className="space-y-2.5">
+            <label className="text-sm font-semibold text-muted-foreground block uppercase tracking-wider">Accent Theme</label>
+            <div className="grid grid-cols-3 gap-4 max-w-lg">
+              {/* Ocean Blue */}
+              <button
+                type="button"
+                onClick={() => changeAccentTheme("ocean")}
+                className={`flex flex-col items-center gap-2 rounded-lg border-2 p-3 transition-all ${
+                  accentTheme === "ocean" ? "border-primary bg-primary/5 shadow-sm font-semibold" : "border-border bg-card hover:bg-muted text-muted-foreground"
+                }`}
+              >
+                <div className="h-6 w-6 rounded-full bg-blue-600 border border-black/10" />
+                <span className="text-xs">Ocean Blue</span>
+              </button>
+              
+              {/* Emerald Green */}
+              <button
+                type="button"
+                onClick={() => changeAccentTheme("emerald")}
+                className={`flex flex-col items-center gap-2 rounded-lg border-2 p-3 transition-all ${
+                  accentTheme === "emerald" ? "border-primary bg-primary/5 shadow-sm font-semibold" : "border-border bg-card hover:bg-muted text-muted-foreground"
+                }`}
+              >
+                <div className="h-6 w-6 rounded-full bg-emerald-600 border border-black/10" />
+                <span className="text-xs">Forest Emerald</span>
+              </button>
+              
+              {/* Royal Purple */}
+              <button
+                type="button"
+                onClick={() => changeAccentTheme("royal")}
+                className={`flex flex-col items-center gap-2 rounded-lg border-2 p-3 transition-all ${
+                  accentTheme === "royal" ? "border-primary bg-primary/5 shadow-sm font-semibold" : "border-border bg-card hover:bg-muted text-muted-foreground"
+                }`}
+              >
+                <div className="h-6 w-6 rounded-full bg-purple-600 border border-black/10" />
+                <span className="text-xs">Royal Purple</span>
+              </button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       <Card className="border border-border bg-card shadow-md">
         <CardHeader>
           <CardTitle>OpenAI/Gemini API Key</CardTitle>

@@ -18,6 +18,50 @@
   --accent-foreground: 0 0% 100%;
 }
 
+.dark {
+  --background: 222 47% 6%;
+  --foreground: 210 40% 98%;
+  --card: 222 47% 9%;
+  --card-foreground: 210 40% 98%;
+  --muted: 217 33% 15%;
+  --muted-foreground: 215 20% 65%;
+  --border: 217 33% 16%;
+  --primary: 210 40% 98%;
+  --primary-foreground: 222 47% 6%;
+  --accent: 160 70% 45%;
+  --accent-foreground: 222 47% 6%;
+}
+
+/* Emerald Theme (Academic Green) */
+.theme-emerald {
+  --primary: 164 85% 24%;
+  --primary-foreground: 0 0% 100%;
+  --accent: 160 70% 36%;
+  --accent-foreground: 0 0% 100%;
+}
+
+.dark.theme-emerald {
+  --primary: 160 70% 45%;
+  --primary-foreground: 165 40% 6%;
+  --accent: 142 70% 45%;
+  --accent-foreground: 165 40% 6%;
+}
+
+/* Royal Theme (Deep Purple) */
+.theme-royal {
+  --primary: 262 80% 50%;
+  --primary-foreground: 0 0% 100%;
+  --accent: 320 70% 45%;
+  --accent-foreground: 0 0% 100%;
+}
+
+.dark.theme-royal {
+  --primary: 263 90% 65%;
+  --primary-foreground: 270 30% 6%;
+  --accent: 320 80% 60%;
+  --accent-foreground: 270 30% 6%;
+}
+
 * {
   border-color: hsl(var(--border));
 }
