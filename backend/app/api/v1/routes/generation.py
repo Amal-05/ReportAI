@@ -73,6 +73,7 @@ def is_nil_answer(value: str) -> bool:
 def generate_content(
     project_id: UUID,
     payload: GenerateContentRequest,
+    x_openai_api_key: str | None = Header(None, alias="X-OpenAI-API-Key"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[GeneratedContent]:
@@ -96,6 +97,7 @@ def generate_content(
         answers=questionnaire.answers if questionnaire else {},
         sections=payload.sections,
         length=payload.length,
+        api_key=x_openai_api_key,
     )
     rows = [
         GeneratedContent(
@@ -506,10 +508,12 @@ Ensure the questions cover the core methodology, architecture/design, implementa
 @router.post("/assist", response_model=ResearchAssistResponse)
 def research_assist(
     payload: ResearchAssistRequest,
+    x_openai_api_key: str | None = Header(None, alias="X-OpenAI-API-Key"),
     user: User | None = Depends(get_current_user),
 ) -> dict:
     return AIContentService().research_assist(
         prompt=payload.prompt,
         selected_text=payload.selected_text,
         full_source=payload.full_source,
+        api_key=x_openai_api_key,
     )

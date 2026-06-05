@@ -1,6 +1,9 @@
 from uuid import UUID
+import io
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Header
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -57,6 +60,7 @@ def generate_latex_report(
 @router.post("/{report_id}/compile", response_model=CompileResult)
 def compile_report(
     report_id: UUID,
+    x_openai_api_key: str | None = Header(None, alias="X-OpenAI-API-Key"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> CompileResult:
@@ -85,7 +89,7 @@ def compile_report(
             err["section_id"] = line_map[err["line"]]
         
         if not ok and err.get("source_fragment"):
-            err["suggested_fix"] = ai_service.suggest_fix(err["message"], err["source_fragment"])
+            err["suggested_fix"] = ai_service.suggest_fix(err["message"], err["source_fragment"], api_key=x_openai_api_key)
         
         enriched_errors.append(err)
 
@@ -131,3 +135,58 @@ def apply_latex_fix(
 
     from fastapi import HTTPException
     raise HTTPException(status_code=400, detail="Fragment not found in content")
+
+
+class CompileRawRequest(BaseModel):
+    latex_source: str
+    references_bib: str | None = None
+
+
+@router.post("/compile-raw", response_model=CompileResult)
+def compile_raw_report(
+    payload: CompileRawRequest,
+    x_openai_api_key: str | None = Header(None, alias="X-OpenAI-API-Key"),
+) -> CompileResult:
+    ok, pdf, log, errors = PDFCompiler().compile(payload.latex_source, payload.references_bib or "")
+    
+    # Enrich errors with suggested fixes
+    from app.services.ai_content import AIContentService
+    ai_service = AIContentService()
+    enriched_errors = []
+    for err in errors:
+        if not ok and err.get("source_fragment"):
+            err["suggested_fix"] = ai_service.suggest_fix(err["message"], err["source_fragment"], api_key=x_openai_api_key)
+        enriched_errors.append(err)
+
+    pdf_key = None
+    if ok and pdf:
+        pdf_key = StorageService().put_bytes(pdf, "report.pdf", "application/pdf")
+        
+    return CompileResult(
+        ok=ok,
+        log=log,
+        pdf_storage_key=pdf_key,
+        errors=[LaTeXError(**err) for err in enriched_errors],
+    )
+
+
+@router.get("/pdf/{pdf_storage_key:path}")
+def get_pdf(
+    pdf_storage_key: str,
+) -> StreamingResponse:
+    storage = StorageService()
+    try:
+        response = storage.client.get_object(
+            Bucket=settings.s3_bucket,
+            Key=pdf_storage_key,
+        )
+        pdf_data = response["Body"].read()
+        return StreamingResponse(
+            io.BytesIO(pdf_data),
+            media_type="application/pdf",
+            headers={"Content-Disposition": "inline; filename=report.pdf"},
+        )
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"PDF not found: {str(e)}")
+

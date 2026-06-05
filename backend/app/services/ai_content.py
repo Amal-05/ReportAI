@@ -25,11 +25,12 @@ class AIContentService:
         answers: dict,
         sections: list[str] | None,
         length: str,
+        api_key: str | None = None,
     ) -> list[dict]:
         target_sections = sections or (template or {}).get("chapters") or DEFAULT_SECTIONS
         
         try:
-            client, model = get_openai_client_and_model()
+            client, model = get_openai_client_and_model(api_key)
         except ValueError:
             return [self._fallback_section(section, project, answers, length) for section in target_sections]
 
@@ -80,9 +81,9 @@ Return ONLY the JSON array."""
             print(f"Error generating AI sections: {e}")
             return [self._fallback_section(section, project, answers, length) for section in target_sections]
 
-    def research_assist(self, prompt: str, selected_text: str | None, full_source: str | None) -> dict:
+    def research_assist(self, prompt: str, selected_text: str | None, full_source: str | None, api_key: str | None = None) -> dict:
         try:
-            client, model = get_openai_client_and_model()
+            client, model = get_openai_client_and_model(api_key)
         except ValueError:
             return {
                 "answer": "AI assistance is currently offline. Please configure your API key.",
@@ -131,9 +132,9 @@ You must return a JSON object with:
         )
         return {"section": section, "content": content, "meta": {"mode": "offline-fallback"}}
 
-    def suggest_fix(self, error_message: str, source_fragment: str) -> str | None:
+    def suggest_fix(self, error_message: str, source_fragment: str, api_key: str | None = None) -> str | None:
         try:
-            client, model = get_openai_client_and_model()
+            client, model = get_openai_client_and_model(api_key)
         except ValueError:
             # Basic heuristic fix for common errors
             if "_" in source_fragment and r"\_" not in source_fragment:
