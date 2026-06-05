@@ -274,7 +274,8 @@ async def generate_report_public(
                 for key in section_keys:
                     for ans_key, ans_val in payload.answers.items():
                         if ans_val and not is_nil_answer(ans_val):
-                            if ans_key == key or key in ans_key or ans_key in key:
+                            # Prevent 'scope' from incorrectly matching 'future_scope'
+                            if ans_key == key or (ans_key != "scope" and key != "future_scope" and (key in ans_key or ans_key in key)):
                                 clean_key = ans_key.replace("_", " ").title()
                                 section_answers.append(f"\\textbf{{{clean_key}}}: {ans_val}")
             
