@@ -22,6 +22,11 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api/v1")
 
 
+@app.get("/")
+def root() -> dict[str, str]:
+    return {"message": "ReportAI API is running. Visit /docs for documentation."}
+
+
 @app.get("/health", tags=["health"])
 def health() -> dict[str, str]:
     return {"status": "ok", "service": settings.project_name}
