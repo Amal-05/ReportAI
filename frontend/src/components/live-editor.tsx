@@ -16,6 +16,7 @@ export function LiveEditor() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [source, setSource] = useState("");
+  const [selectedText, setSelectedText] = useState("");
   const [isCompiling, setIsCompiling] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
@@ -51,10 +52,12 @@ export function LiveEditor() {
     }
   };
 
-  const getSelectedText = () => {
-    if (!textareaRef.current) return "";
+  const handleTextareaSelect = () => {
+    if (!textareaRef.current) return;
     const { selectionStart, selectionEnd } = textareaRef.current;
-    return source.substring(selectionStart, selectionEnd);
+    if (selectionStart !== selectionEnd) {
+      setSelectedText(source.substring(selectionStart, selectionEnd));
+    }
   };
 
   const handleApplyChange = (newText: string, action: "replace" | "insert") => {
@@ -62,13 +65,21 @@ export function LiveEditor() {
     const { selectionStart, selectionEnd } = textareaRef.current;
 
     let updatedSource = "";
-    if (action === "replace" && selectionStart !== selectionEnd) {
-      updatedSource = source.substring(0, selectionStart) + newText + source.substring(selectionEnd);
+    if (action === "replace") {
+      if (selectionStart !== selectionEnd) {
+        updatedSource = source.substring(0, selectionStart) + newText + source.substring(selectionEnd);
+      } else if (selectedText && source.includes(selectedText)) {
+        const index = source.indexOf(selectedText);
+        updatedSource = source.substring(0, index) + newText + source.substring(index + selectedText.length);
+      } else {
+        updatedSource = source.substring(0, selectionEnd) + "\n" + newText + source.substring(selectionEnd);
+      }
     } else {
       updatedSource = source.substring(0, selectionEnd) + "\n" + newText + source.substring(selectionEnd);
     }
 
     setSource(updatedSource);
+    setSelectedText("");
   };
 
   const handleSave = async () => {
@@ -195,6 +206,7 @@ export function LiveEditor() {
             ref={textareaRef}
             value={source}
             onChange={(event) => setSource(event.target.value)}
+            onSelect={handleTextareaSelect}
             placeholder="Select a project workspace above to load its LaTeX source..."
             disabled={!selectedProjectId}
             className="min-h-0 flex-1 resize-none bg-[#0f1720] p-4 font-mono text-sm leading-6 text-[#d7e2ef] outline-none disabled:opacity-50"
@@ -288,7 +300,8 @@ export function LiveEditor() {
         <ResearchAssistant
           source={source}
           onApplyChange={handleApplyChange}
-          getSelectedText={getSelectedText}
+          selectedText={selectedText}
+          onClearSelection={() => setSelectedText("")}
         />
       )}
     </div>

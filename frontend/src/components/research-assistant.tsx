@@ -16,10 +16,11 @@ interface Message {
 interface ResearchAssistantProps {
   source: string;
   onApplyChange: (newText: string, action: "replace" | "insert") => void;
-  getSelectedText: () => string;
+  selectedText: string;
+  onClearSelection?: () => void;
 }
 
-export function ResearchAssistant({ source, onApplyChange, getSelectedText }: ResearchAssistantProps) {
+export function ResearchAssistant({ source, onApplyChange, selectedText, onClearSelection }: ResearchAssistantProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -41,7 +42,6 @@ export function ResearchAssistant({ source, onApplyChange, getSelectedText }: Re
     setIsLoading(true);
 
     try {
-      const selectedText = getSelectedText();
       const response = await researchAssist({
         prompt: input,
         selected_text: selectedText || undefined,
@@ -139,6 +139,24 @@ export function ResearchAssistant({ source, onApplyChange, getSelectedText }: Re
       </div>
 
       <div className="border-t p-4 bg-muted/30">
+        {selectedText && (
+          <div className="mb-2.5 rounded border border-primary/20 bg-primary/5 p-2 text-xs flex items-center justify-between">
+            <div className="truncate flex-1 text-primary">
+              <span className="font-semibold">Selected:</span> "{selectedText}"
+            </div>
+            {onClearSelection && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-4 w-4 ml-1 text-muted-foreground hover:text-foreground hover:bg-transparent"
+                onClick={onClearSelection}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
