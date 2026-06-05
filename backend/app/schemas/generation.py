@@ -15,3 +15,15 @@ class GeneratedSectionRead(BaseModel):
     meta: dict
 
     model_config = {"from_attributes": True}
+
+
+class ResearchAssistRequest(BaseModel):
+    selected_text: str | None = None
+    full_source: str | None = None
+    prompt: str
+
+
+class ResearchAssistResponse(BaseModel):
+    answer: str
+    suggested_text: str | None = None
+    action: str = "chat"  # "chat", "replace", "insert"

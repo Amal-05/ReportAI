@@ -80,6 +80,48 @@ Return ONLY the JSON array."""
             print(f"Error generating AI sections: {e}")
             return [self._fallback_section(section, project, answers, length) for section in target_sections]
 
+    def research_assist(self, prompt: str, selected_text: str | None, full_source: str | None) -> dict:
+        try:
+            client, model = get_openai_client_and_model()
+        except ValueError:
+            return {
+                "answer": "AI assistance is currently offline. Please configure your API key.",
+                "suggested_text": None,
+                "action": "chat"
+            }
+
+        context_text = f"\nSelected Text:\n{selected_text}" if selected_text else ""
+        if not selected_text and full_source:
+            context_text = f"\nFull Document Context (partial):\n{full_source[:2000]}"
+
+        system_prompt = """You are an expert academic research assistant and LaTeX specialist. 
+Your goal is to help students refine their project reports.
+You must return a JSON object with:
+- "answer": A brief, helpful explanation of what you did or suggested.
+- "suggested_text": The modified LaTeX code or new content (if any).
+- "action": One of ["chat", "replace", "insert"]. Use "replace" if you modified the selected text, "insert" if you generated something new to be added, and "chat" for general advice."""
+
+        user_prompt = f"User Request: {prompt}{context_text}\n\nReturn only JSON."
+
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={"type": "json_object"} if "gemini" not in model.lower() else None
+            )
+            import json
+            return json.loads(response.choices[0].message.content.strip())
+        except Exception as e:
+            print(f"Error in research_assist: {e}")
+            return {
+                "answer": f"Sorry, I encountered an error: {str(e)}",
+                "suggested_text": None,
+                "action": "chat"
+            }
+
     def _fallback_section(self, section: str, project: dict, answers: dict, length: str) -> dict:
         content = (
             f"\\section{{{section}}}\n"

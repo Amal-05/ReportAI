@@ -1,4 +1,4 @@
-import type { CompileResult, Report } from "./types";
+import type { CompileResult, Report, ResearchAssistRequest, ResearchAssistResponse } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://reportai-ytsn.onrender.com/api/v1";
 
@@ -35,5 +35,12 @@ export async function applyFix(reportId: string, sectionId: string, oldFragment:
   return api(`/reports/${reportId}/fix`, {
     method: "POST",
     body: JSON.stringify({ section_id: sectionId, old_fragment: oldFragment, new_fragment: newFragment }),
+  });
+}
+
+export async function researchAssist(payload: ResearchAssistRequest): Promise<ResearchAssistResponse> {
+  return api("/generation/assist", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }

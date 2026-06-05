@@ -15,7 +15,7 @@ from app.models.content import GeneratedContent
 from app.models.questionnaire import Questionnaire
 from app.models.template import Template
 from app.models.user import User
-from app.schemas.generation import GenerateContentRequest, GeneratedSectionRead
+from app.schemas.generation import GenerateContentRequest, GeneratedSectionRead, ResearchAssistRequest, ResearchAssistResponse
 from app.services.ai_content import AIContentService
 
 router = APIRouter()
@@ -501,3 +501,15 @@ Ensure the questions cover the core methodology, architecture/design, implementa
             {"id": "problem_statement", "label": "What specific problem does your project solve?", "type": "textarea"},
             {"id": "objectives", "label": "What are the primary objectives of the project?", "type": "textarea"}
         ]}
+
+
+@router.post("/assist", response_model=ResearchAssistResponse)
+def research_assist(
+    payload: ResearchAssistRequest,
+    user: User | None = Depends(get_current_user),
+) -> dict:
+    return AIContentService().research_assist(
+        prompt=payload.prompt,
+        selected_text=payload.selected_text,
+        full_source=payload.full_source,
+    )

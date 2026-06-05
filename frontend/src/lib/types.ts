@@ -44,3 +44,15 @@ export type Report = {
   pdf_storage_key: string | null;
   compile_log?: string;
 };
+
+export type ResearchAssistRequest = {
+  selected_text?: string;
+  full_source?: string;
+  prompt: string;
+};
+
+export type ResearchAssistResponse = {
+  answer: string;
+  suggested_text: string | null;
+  action: "chat" | "replace" | "insert";
+};
