@@ -1,307 +1,322 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
-import Link from "next/link";
-import { Download, RefreshCcw, Save, AlertCircle, Wrench, Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { ResearchAssistant } from "./research-assistant";
-import { useAuth } from "@/components/auth-provider";
-import { projectsQuery, updateProject } from "@/lib/firestore";
-import { onSnapshot } from "firebase/firestore";
-import { compileRawReport, getPdfUrl } from "@/lib/api";
-import type { Project, LaTeXError } from "@/lib/types";
+/**
+ * live-editor.tsx  (complete replacement / enhancement)
+ *
+ * Overleaf-style split-pane live editor:
+ *   LEFT  → LatexEditor (syntax highlighted, error line gutter, autosave)
+ *   RIGHT → PdfPreview  (iframe showing real compiled PDF from backend)
+ *
+ * Features:
+ *   ✓ Autosave with 2s debounce after typing stops
+ *   ✓ Background auto-compilation after save (calls /reports/compile-raw)
+ *   ✓ Compile status badge (idle / unsaved / compiling / success / error)
+ *   ✓ Error line highlighting in editor gutter
+ *   ✓ AI-powered polish pass (/generation/polish-latex)
+ *   ✓ AI-assisted fix for compile errors (existing applyFix API)
+ *   ✓ PDF served as blob URL from backend binary response
+ *   ✓ Resizable split pane (drag handle)
+ *   ✓ Keyboard shortcut: Ctrl+S to save + compile
+ *
+ * Does NOT rewrite report generation pipeline.
+ * Drops into project-workspace.tsx where the old LaTeX <Textarea> was.
+ */
 
-export function LiveEditor() {
-  const { user } = useAuth();
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
-  const [source, setSource] = useState("");
-  const [selectedText, setSelectedText] = useState("");
-  const [isCompiling, setIsCompiling] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+import { useCallback, useEffect, useRef, useState } from "react";
+import { LatexEditor } from "@/components/latex-editor";
+import { PdfPreview } from "@/components/pdf-preview";
+import { LatexErrorPanel } from "@/components/latex-error-panel";
+import {
+  CompileStatus,
+  EditorError,
+  debounce,
+  findErrorLine,
+  lintLatex,
+  autoFixLatex,
+} from "@/lib/latex-utils";
+import { compileRawReport, getPdfUrl } from "@/lib/api";
+import type { LaTeXError } from "@/lib/types";
+
+// ── Props ─────────────────────────────────────────────────────────────────────
+
+interface LiveEditorProps {
+  /** Current LaTeX source (controlled from parent) */
+  latex?: string;
+  /** Notify parent of edits so it can persist to Firebase */
+  onLatexChange?: (latex: string) => void;
+  /** Called after successful save (parent persists to Firebase/backend) */
+  onSave?: (latex: string) => Promise<void>;
+  /** Called with AI-polish result — parent decides whether to accept */
+  onPolish?: (latex: string) => Promise<string>;
+  /** Report ID for fix endpoint (null if not yet created via backend) */
+  reportId?: string | null;
+  /** Project title (for display) */
+  projectTitle?: string;
+}
+
+// ── AUTOSAVE delay ────────────────────────────────────────────────────────────
+
+const AUTOSAVE_DELAY = 2000;   // ms after last keystroke → save
+const AUTOCOMPILE_DELAY = 500; // ms after save → compile
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
+export function LiveEditor({
+  latex = "",
+  onLatexChange,
+  onSave,
+  onPolish,
+  reportId,
+  projectTitle,
+}: LiveEditorProps) {
+  const [localLatex, setLocalLatex] = useState(latex ?? "");
+  const [compileStatus, setCompileStatus] = useState<CompileStatus>("idle");
+  const [errors, setErrors] = useState<EditorError[]>([]);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
-  const [compileErrors, setCompileErrors] = useState<LaTeXError[]>([]);
-  const [successMessage, setSuccessMessage] = useState("");
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [isPolishing, setIsPolishing] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  // Pane split ratio (% for left pane)
+  const [splitPct, setSplitPct] = useState(50);
+  const splitRef = useRef<HTMLDivElement>(null);
+  const isDragging = useRef(false);
+
+  // Keep local in sync if parent updates (e.g. after Generate Report)
+  useEffect(() => {
+    const safe = latex ?? "";
+    if (safe !== localLatex) {
+      setLocalLatex(safe);
+      setCompileStatus(safe ? "unsaved" : "idle");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latex]);
+
+  // ── Compile ──────────────────────────────────────────────────────────────────
+
+  const compile = useCallback(async (source: string) => {
+    if (!source.trim()) return;
+
+    // Auto-fix common AI LaTeX mistakes before sending to compiler
+    const fixed = autoFixLatex(source);
+    if (fixed !== source) {
+      // Update editor with fixed source silently
+      setLocalLatex(fixed);
+      onLatexChange?.(fixed);
+    }
+
+    setCompileStatus("compiling");
+    setErrors([]);
+    try {
+      const result = await compileRawReport(fixed);
+      if (result.ok && result.pdf_storage_key) {
+        // Fetch PDF binary → blob URL so iframe can display it
+        const API_URL =
+          process.env.NEXT_PUBLIC_API_URL ??
+          "https://reportai-ytsn.onrender.com/api/v1";
+        const token =
+          typeof window !== "undefined"
+            ? window.localStorage.getItem("reportai_token")
+            : null;
+        const pdfRes = await fetch(
+          `${API_URL}/reports/pdf/${result.pdf_storage_key}`,
+          { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+        );
+        if (pdfRes.ok) {
+          const blob = await pdfRes.blob();
+          const url = URL.createObjectURL(blob);
+          // Revoke previous blob URL to free memory
+          setPdfUrl((prev) => {
+            if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+            return url;
+          });
+        } else {
+          // Backend URL fallback (if blob fetch fails)
+          setPdfUrl(getPdfUrl(result.pdf_storage_key));
+        }
+        setCompileStatus("success");
+        setErrors([]);
+      } else {
+        setCompileStatus("error");
+        const mapped: EditorError[] = (result.errors ?? []).map(
+          (e: LaTeXError) => ({
+            line: e.line ?? findErrorLine(source, e.source_fragment),
+            message: e.message,
+            context: e.context,
+            source_fragment: e.source_fragment,
+            suggested_fix: e.suggested_fix,
+            section_id: e.section_id,
+          })
+        );
+        setErrors(mapped);
+      }
+    } catch (err) {
+      setCompileStatus("error");
+      setErrors([
+        {
+          line: null,
+          message: err instanceof Error ? err.message : "Compilation failed",
+          context: null,
+          source_fragment: null,
+          suggested_fix: null,
+          section_id: null,
+        },
+      ]);
+    }
+  }, []);
+
+  // ── Autosave + auto-compile ───────────────────────────────────────────────
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const debouncedSaveAndCompile = useCallback(
+    debounce(async (source: string) => {
+      // 1. Notify parent to persist
+      try {
+        await onSave?.(source);
+      } catch (_) {/* swallow — parent shows its own errors */ }
+      // 2. Compile after small delay
+      setTimeout(() => compile(source), AUTOCOMPILE_DELAY);
+    }, AUTOSAVE_DELAY),
+    [onSave, compile]
+  );
+
+  const handleChange = useCallback(
+    (next: string) => {
+      setLocalLatex(next);
+      onLatexChange?.(next);
+      setCompileStatus("unsaved");
+      debouncedSaveAndCompile(next);
+    },
+    [onLatexChange, debouncedSaveAndCompile]
+  );
+
+  // Manual save (Ctrl+S)
+  const handleManualSave = useCallback(async () => {
+    try {
+      await onSave?.(localLatex);
+    } catch (_) { /* parent handles */ }
+    compile(localLatex);
+  }, [localLatex, onSave, compile]);
+
+  // ── Polish ───────────────────────────────────────────────────────────────────
+
+  const handlePolish = useCallback(async () => {
+    if (!onPolish) return;
+    setIsPolishing(true);
+    setMessage(null);
+    try {
+      const polished = await onPolish(localLatex);
+      setLocalLatex(polished);
+      onLatexChange?.(polished);
+      setCompileStatus(polished ? "unsaved" : "idle");
+      setMessage("Polish complete — review changes then recompile.");
+      // Auto-compile polished version
+      setTimeout(() => compile(polished), 500);
+    } catch (err) {
+      setMessage(
+        err instanceof Error ? err.message : "Polish failed"
+      );
+    } finally {
+      setIsPolishing(false);
+    }
+  }, [onPolish, localLatex, onLatexChange, compile]);
+
+  // ── Lint warnings ────────────────────────────────────────────────────────────
+
+  const lint = lintLatex(localLatex);
+
+  // ── Resizable split pane ──────────────────────────────────────────────────
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isDragging.current = true;
+  };
 
   useEffect(() => {
-    if (!user) return;
-    const unsubscribe = onSnapshot(
-      projectsQuery(user.uid),
-      (snapshot) => {
-        const loadedProjects = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as Project);
-        setProjects(loadedProjects);
-      },
-      (error) => console.error("Error fetching projects:", error)
-    );
-    return () => unsubscribe();
-  }, [user]);
+    const onMove = (e: MouseEvent) => {
+      if (!isDragging.current || !splitRef.current) return;
+      const container = splitRef.current.parentElement;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const pct = ((e.clientX - rect.left) / rect.width) * 100;
+      setSplitPct(Math.min(80, Math.max(20, pct)));
+    };
+    const onUp = () => { isDragging.current = false; };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
 
-  const selectedProject = projects.find((p) => p.id === selectedProjectId);
-
-  const handleProjectChange = (projectId: string) => {
-    setSelectedProjectId(projectId);
-    setPdfUrl(null);
-    setCompileErrors([]);
-    setSuccessMessage("");
-    const proj = projects.find((p) => p.id === projectId);
-    if (proj) {
-      setSource(proj.latest_latex ?? "");
-    } else {
-      setSource("");
-    }
-  };
-
-  const handleTextareaSelect = () => {
-    if (!textareaRef.current) return;
-    const { selectionStart, selectionEnd } = textareaRef.current;
-    if (selectionStart !== selectionEnd) {
-      setSelectedText(source.substring(selectionStart, selectionEnd));
-    }
-  };
-
-  const handleApplyChange = (newText: string, action: "replace" | "insert") => {
-    if (!textareaRef.current) return;
-    const { selectionStart, selectionEnd } = textareaRef.current;
-
-    let updatedSource = "";
-    if (action === "replace") {
-      if (selectionStart !== selectionEnd) {
-        updatedSource = source.substring(0, selectionStart) + newText + source.substring(selectionEnd);
-      } else if (selectedText && source.includes(selectedText)) {
-        const index = source.indexOf(selectedText);
-        updatedSource = source.substring(0, index) + newText + source.substring(index + selectedText.length);
-      } else {
-        updatedSource = source.substring(0, selectionEnd) + "\n" + newText + source.substring(selectionEnd);
-      }
-    } else {
-      updatedSource = source.substring(0, selectionEnd) + "\n" + newText + source.substring(selectionEnd);
-    }
-
-    setSource(updatedSource);
-    setSelectedText("");
-  };
-
-  const handleSave = async () => {
-    if (!user || !selectedProjectId) return;
-    setIsSaving(true);
-    setSuccessMessage("");
-    try {
-      await updateProject(user.uid, selectedProjectId, {
-        latest_latex: source,
-      });
-      setSuccessMessage("Project saved successfully!");
-      setTimeout(() => setSuccessMessage(""), 3000);
-    } catch (error) {
-      console.error("Error saving project:", error);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleCompile = async (sourceToCompile = source) => {
-    if (!selectedProjectId) return;
-    setIsCompiling(true);
-    setCompileErrors([]);
-    setSuccessMessage("");
-    try {
-      const result = await compileRawReport(sourceToCompile);
-      if (result.ok && result.pdf_storage_key) {
-        setPdfUrl(getPdfUrl(result.pdf_storage_key));
-        setSuccessMessage("Compilation successful!");
-      } else {
-        setPdfUrl(null);
-        setCompileErrors(result.errors || []);
-      }
-    } catch (error) {
-      console.error("Error compiling report:", error);
-    } finally {
-      setIsCompiling(false);
-    }
-  };
-
-  const handleExportTex = () => {
-    if (!source) return;
-    const blob = new Blob([source], { type: "text/x-tex" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${selectedProject?.title.toLowerCase().replace(/[^a-z0-9]+/g, "_") || "report"}.tex`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  if (!user) {
-    return (
-      <div className="rounded-lg border bg-card p-6 text-center max-w-md mx-auto my-12 shadow-md">
-        <h2 className="text-lg font-semibold">Sign in required</h2>
-        <p className="mt-2 text-sm text-muted-foreground">Log in to load and edit your LaTeX reports.</p>
-        <Button className="mt-4" asChild>
-          <Link href="/login">Login</Link>
-        </Button>
-      </div>
-    );
-  }
+  // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="relative">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4 p-4 rounded-lg border bg-card shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <span className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Select Project:</span>
-          <select
-            value={selectedProjectId}
-            onChange={(e) => handleProjectChange(e.target.value)}
-            className="flex h-10 w-full sm:w-72 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-          >
-            <option value="">-- Choose a Project --</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.title}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {successMessage && (
-          <div className="text-xs font-semibold text-green-500 bg-green-500/10 px-3 py-1.5 rounded border border-green-500/20">
-            {successMessage}
-          </div>
-        )}
-      </div>
-
-      <div className="grid min-h-[calc(100vh-88px)] gap-4 editor-grid">
-        <section className="flex min-h-[560px] flex-col rounded-lg border bg-card shadow-sm">
-          <div className="flex items-center justify-between border-b p-3">
-            <h2 className="font-semibold font-mono text-sm text-primary">
-              {selectedProject
-                ? `${selectedProject.title.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.tex`
-                : "report.tex"}
-            </h2>
-            <div className="flex gap-2">
-              <Button
-                size="icon"
-                variant="ghost"
-                title="Save"
-                onClick={handleSave}
-                disabled={isSaving || !selectedProjectId}
-              >
-                {isSaving ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : <Save className="h-4 w-4" />}
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                title="Recompile"
-                onClick={() => handleCompile()}
-                disabled={isCompiling || !selectedProjectId}
-              >
-                {isCompiling ? (
-                  <RefreshCcw className="h-4 w-4 animate-spin text-primary" />
-                ) : (
-                  <RefreshCcw className="h-4 w-4" />
-                )}
-              </Button>
-            </div>
-          </div>
-          <textarea
-            ref={textareaRef}
-            value={source}
-            onChange={(event) => setSource(event.target.value)}
-            onSelect={handleTextareaSelect}
-            placeholder="Select a project workspace above to load its LaTeX source..."
-            disabled={!selectedProjectId}
-            className="min-h-0 flex-1 resize-none bg-[#0f1720] p-4 font-mono text-sm leading-6 text-[#d7e2ef] outline-none disabled:opacity-50"
-          />
-        </section>
-
-        <section className="flex min-h-[560px] flex-col rounded-lg border bg-card shadow-sm">
-          <div className="flex items-center justify-between border-b p-3">
-            <h2 className="font-semibold">PDF Preview</h2>
-            <Button size="sm" variant="outline" onClick={handleExportTex} disabled={!source}>
-              <Download className="mr-1.5 h-4 w-4" />
-              Export .tex
-            </Button>
-          </div>
-          <div className="flex-1 overflow-auto bg-muted p-5 min-h-[500px] flex flex-col justify-stretch">
-            {pdfUrl ? (
-              <iframe
-                src={pdfUrl}
-                className="w-full flex-1 min-h-[500px] border rounded bg-white shadow-inner"
-                title="PDF Compilation Output"
-              />
-            ) : (
-              <article className="mx-auto min-h-full w-full max-w-[620px] bg-white p-10 text-black shadow-sm flex-1">
-                <h1 className="text-center text-2xl font-semibold font-serif">
-                  {selectedProject ? selectedProject.title : "ReportAI Generated Report"}
-                </h1>
-                <div className="mt-8 whitespace-pre-wrap text-sm leading-7 font-serif text-slate-800">
-                  {source
-                    ? source.replaceAll("\\", "")
-                    : "Select a project workspace and click Recompile to preview the PDF draft."}
-                </div>
-              </article>
-            )}
-          </div>
-        </section>
-      </div>
-
-      {compileErrors.length > 0 && (
-        <div className="mt-4 rounded-md border border-destructive/20 bg-destructive/5 p-4 space-y-3">
-          <h3 className="text-sm font-semibold text-destructive flex items-center gap-1.5">
-            <AlertCircle className="h-4 w-4" /> LaTeX Compilation Errors
-          </h3>
-          <div className="space-y-3">
-            {compileErrors.map((error, idx) => (
-              <div
-                key={idx}
-                className="rounded bg-background border border-destructive/10 p-3 text-xs flex justify-between items-start gap-4"
-              >
-                <div className="space-y-1 flex-1">
-                  <div className="font-semibold text-destructive">
-                    {error.line ? `Line ${error.line}: ` : ""}{error.message}
-                  </div>
-                  {error.context && (
-                    <pre className="mt-1 overflow-x-auto rounded bg-muted p-2 font-mono text-[10px] text-muted-foreground">
-                      {error.context}
-                    </pre>
-                  )}
-                  {error.suggested_fix && (
-                    <div className="mt-2 space-y-1">
-                      <div className="font-medium text-muted-foreground uppercase tracking-wider text-[9px]">
-                        Suggested AI Fix:
-                      </div>
-                      <div className="rounded border border-primary/20 bg-primary/5 p-1.5 font-mono text-[10px] text-primary">
-                        {error.suggested_fix}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                {error.suggested_fix && error.source_fragment && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="flex items-center gap-1 border-primary/50 text-primary hover:bg-primary/10 text-xs py-1 h-7"
-                    onClick={() => {
-                      const updated = source.replace(error.source_fragment!, error.suggested_fix!);
-                      setSource(updated);
-                      handleCompile(updated);
-                    }}
-                  >
-                    <Wrench className="h-3 w-3" />
-                    Auto-Fix
-                  </Button>
-                )}
-              </div>
-            ))}
-          </div>
+    <div className="flex flex-col gap-3">
+      {/* Lint warnings */}
+      {lint.warnings.length > 0 && (
+        <div className="rounded-md border border-yellow-600/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-300 flex items-center gap-2">
+          <span>⚠</span>
+          {lint.warnings[0]}
         </div>
       )}
 
-      {selectedProjectId && (
-        <ResearchAssistant
-          source={source}
-          onApplyChange={handleApplyChange}
-          selectedText={selectedText}
-          onClearSelection={() => setSelectedText("")}
+      {/* Message bar */}
+      {message && (
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          {message}
+        </div>
+      )}
+
+      {/* ── Split pane ── */}
+      <div
+        className="flex gap-0 rounded-lg overflow-hidden border border-border"
+        style={{ height: "calc(100vh - 320px)", minHeight: "520px" }}
+      >
+        {/* Left: Editor */}
+        <div style={{ width: `${splitPct}%`, minWidth: 0 }} className="flex flex-col">
+          <LatexEditor
+            value={localLatex}
+            onChange={handleChange}
+            onSave={handleManualSave}
+            onPolish={onPolish ? handlePolish : undefined}
+            compileStatus={compileStatus}
+            errors={errors}
+            isPolishing={isPolishing}
+            className="h-full rounded-none border-0"
+          />
+        </div>
+
+        {/* Drag handle */}
+        <div
+          ref={splitRef}
+          onMouseDown={handleMouseDown}
+          className="w-1.5 bg-border/40 hover:bg-purple-500/40 cursor-col-resize transition-colors shrink-0 flex items-center justify-center group"
+          title="Drag to resize"
+        >
+          <div className="h-8 w-0.5 rounded-full bg-border group-hover:bg-purple-400 transition-colors" />
+        </div>
+
+        {/* Right: PDF preview */}
+        <div style={{ width: `${100 - splitPct}%`, minWidth: 0 }} className="flex flex-col">
+          <PdfPreview
+            pdfUrl={pdfUrl}
+            compileStatus={compileStatus}
+            errorCount={errors.length}
+            onRecompile={() => compile(localLatex)}
+            className="h-full rounded-none border-0"
+          />
+        </div>
+      </div>
+
+      {/* ── Error detail panel (existing LatexErrorPanel, unchanged) ── */}
+      {reportId && errors.length > 0 && (
+        <LatexErrorPanel
+          reportId={reportId}
+          errors={errors as LaTeXError[]}
+          onFixApplied={() => {
+            // After AI applies a fix, recompile
+            compile(localLatex);
+          }}
         />
       )}
     </div>

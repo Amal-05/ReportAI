@@ -2,6 +2,8 @@ import type { Project, QualityScore } from "@/lib/types";
 import type { Question } from "./questionnaire";
 import { getOpenAiApiKey } from "@/lib/utils";
 import { generateLatex } from "./pdf-generator";
+import type { Project } from "./types";
+import type { Question } from "./questionnaire";
 
 // Re-export so existing imports still work
 export { generateLatex };
@@ -155,3 +157,52 @@ export async function generateAnswersWithAI(
   const data = await res.json();
   return data.answers as Record<string, string>;
 }
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://reportai-ytsn.onrender.com/api/v1";
+
+
+function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = typeof window !== "undefined" ? window.localStorage.getItem("reportai_token") : null;
+  const customKey = typeof window !== "undefined" ? window.localStorage.getItem("reportai_custom_api_key") : null;
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  if (customKey) headers["X-OpenAI-API-Key"] = customKey;
+  return headers;
+}
+
+// ── Polish LaTeX ──────────────────────────────────────────────────────────────
+
+/**
+ * Sends the current LaTeX source to the backend AI polish endpoint.
+ * The backend:
+ *   1. Removes placeholder text (lorem ipsum, [Answer for:], etc.)
+ *   2. Fixes broken tables and figure references
+ *   3. Normalises spacing and formatting inconsistencies
+ *   4. Returns cleaned LaTeX source
+ */
+export async function polishLatexWithAI(
+  latexSource: string,
+  project: Project
+): Promise<string> {
+  const res = await fetch(`${API_URL}/generation/polish-latex`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({
+      latex_source: latexSource,
+      project: {
+        title: project.title,
+        domain: project.domain,
+        description: project.description,
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(detail || `Polish failed with status ${res.status}`);
+  }
+
+  const data = await res.json();
+  return (data.latex_source as string) || latexSource;
+}
+

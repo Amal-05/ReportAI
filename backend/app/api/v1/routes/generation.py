@@ -1,5 +1,6 @@
 from uuid import UUID
 import re
+import json
 
 from fastapi import APIRouter, Depends, status, Header
 from sqlalchemy import select
@@ -59,11 +60,13 @@ class GenerateQuestionsRequest(BaseModel):
     templateProfile: TemplateProfileInfo | None = None
 
 
+class PolishLatexRequest(BaseModel):
+    latex_source: str
+    project: ProjectInfo
+
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-# These are the only valid top-level chapters for an academic report.
-# We NEVER use templateProfile.chapters directly as chapters — they may
-# contain questionnaire question labels (the bug shown in the PDF).
 DEFAULT_CHAPTERS = [
     "Introduction",
     "System Study",
@@ -76,9 +79,6 @@ DEFAULT_CHAPTERS = [
     "Future Scope",
 ]
 
-# Recognised chapter names — used to validate templateProfile.chapters
-# before trusting them. If the list contains non-chapter strings
-# (like "Problem Statement", "Objectives" etc.) we ignore it entirely.
 VALID_CHAPTER_KEYWORDS = {
     "abstract", "introduction", "literature", "review", "study",
     "analysis", "design", "architecture", "methodology", "implementation",
@@ -87,7 +87,6 @@ VALID_CHAPTER_KEYWORDS = {
     "related", "work", "evaluation", "performance",
 }
 
-# Answer keys that map to each chapter
 CHAPTER_ANSWER_KEYS: dict[str, list[str]] = {
     "Abstract":             ["abstract", "overview"],
     "Introduction":         ["problem_statement", "objectives", "scope", "background", "motivation", "introduction"],
@@ -111,9 +110,10 @@ CHAPTER_ANSWER_KEYS: dict[str, list[str]] = {
     "Future Scope":         ["future_scope", "future_work", "enhancements", "limitations", "future"],
 }
 
-# Keys that must only match exactly (no substring bleed)
 EXACT_ONLY_KEYS = {"scope", "model", "database", "summary", "survey", "tools", "background"}
 
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def is_nil_answer(value: str) -> bool:
     if not value:
@@ -125,20 +125,14 @@ def is_nil_answer(value: str) -> bool:
 
 
 def _validate_chapters(chapters: list[str] | None) -> list[str] | None:
-    """
-    Return chapters only if they look like real academic chapter names.
-    Rejects lists that are actually questionnaire question labels.
-    """
     if not chapters:
         return None
     valid_count = sum(
         1 for c in chapters
         if any(kw in c.lower() for kw in VALID_CHAPTER_KEYWORDS)
     )
-    # Require at least 60% of entries to look like real chapter names
     if valid_count / len(chapters) < 0.6:
         return None
-    # Also reject if any entry is suspiciously long (question labels are long)
     if any(len(c) > 40 for c in chapters):
         return None
     return chapters
@@ -167,7 +161,105 @@ def _fmt_key(k: str) -> str:
     return k.replace("_", " ").title()
 
 
-# ── Chapter intro paragraphs ──────────────────────────────────────────────────
+def _spacing(s: str | None) -> str:
+    """Return a baselinestretch command — avoids the setspace package."""
+    try:
+        v = float(s or "1.5")
+        if v >= 1.8: return r"\renewcommand{\baselinestretch}{2.0}"
+        if v < 1.3:  return r"\renewcommand{\baselinestretch}{1.0}"
+    except (ValueError, TypeError):
+        pass
+    return r"\renewcommand{\baselinestretch}{1.5}"
+
+
+def _bib(c: str | None) -> str:
+    if c and ("apa" in c.lower() or "harvard" in c.lower()):
+        return "apalike"
+    return "IEEEtran"
+
+
+def _basic_clean(source: str) -> str:
+    """
+    Regex-based LaTeX cleanup.
+    Fixes: placeholders, lonely \\item, \\hline outside tabular, excess blank lines.
+    """
+    # Remove placeholder italic blocks
+    source = re.sub(
+        r"\\textit\{Detailed content for the [^}]+ phase[^}]*\}",
+        "", source, flags=re.IGNORECASE,
+    )
+    source = re.sub(r"\[Answer for:[^\]]*\]", "", source, flags=re.IGNORECASE)
+    source = re.sub(r"lorem ipsum[^.]*\.", "", source, flags=re.IGNORECASE)
+
+    # Fix lonely \\item — wrap consecutive \\item blocks in itemize
+    lines = source.split("\n")
+    out = []
+    in_list = False
+    list_depth = 0
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Track environment depth
+        if re.match(r"\\begin\{(itemize|enumerate|description)\}", stripped):
+            in_list = True
+            list_depth += 1
+            out.append(line)
+            continue
+        if re.match(r"\\end\{(itemize|enumerate|description)\}", stripped):
+            list_depth = max(0, list_depth - 1)
+            in_list = list_depth > 0
+            out.append(line)
+            continue
+
+        # Lonely \\item
+        if stripped.startswith("\\item") and not in_list:
+            out.append("\\begin{itemize}")
+            out.append(line)
+            # peek ahead to collect all consecutive items
+            in_list = True
+            list_depth += 1
+            continue
+
+        # Close auto-opened list when we hit a non-item, non-blank line
+        if in_list and list_depth > 0 and not stripped.startswith("\\item") and stripped and not stripped.startswith("%"):
+            # Only close if the list was auto-opened (heuristic: close at chapter/section)
+            if re.match(r"\\(chapter|section|subsection|end\{)", stripped):
+                out.append("\\end{itemize}")
+                list_depth = max(0, list_depth - 1)
+                in_list = list_depth > 0
+
+        out.append(line)
+
+    # Close any still-open auto lists
+    if in_list and list_depth > 0:
+        out.append("\\end{itemize}")
+
+    source = "\n".join(out)
+
+    # Remove \\hline outside tabular (simple heuristic: remove standalone \\hline lines)
+    # We don't track environments here so just remove lines that are ONLY \\hline
+    # and appear between two non-table lines — conservative: only remove if surrounded by text
+    source = re.sub(r"(?<!begin\{tabular[^}]*\})\n\\hline(?=\n[^&])", "", source)
+
+    # Collapse triple+ blank lines
+    source = re.sub(r"\n{3,}", "\n\n", source)
+    source = "\n".join(line.rstrip() for line in source.splitlines())
+    return source
+
+
+def _extract_ai_text(response) -> str:
+    """Robustly extract text content from an AI response (handles Gemini quirks)."""
+    choice = response.choices[0]
+    if choice.message.content:
+        return choice.message.content
+    try:
+        return choice.message.model_extra.get("content", "") or ""
+    except Exception:
+        return ""
+
+
+# ── Chapter intros ────────────────────────────────────────────────────────────
 
 _INTROS: dict[str, str] = {
     "Abstract": (
@@ -241,7 +333,7 @@ def _intro(chapter: str, title: str, domain: str) -> str:
     return tpl.replace("TITLE", title).replace("DOMAIN", domain).replace("SECTION", chapter.lower())
 
 
-# ── Fallback LaTeX ────────────────────────────────────────────────────────────
+# ── Fallback LaTeX (no AI key) ────────────────────────────────────────────────
 
 def _build_fallback_latex(payload: "GenerateReportRequest") -> str:
     title = payload.project.title
@@ -250,7 +342,6 @@ def _build_fallback_latex(payload: "GenerateReportRequest") -> str:
 
     raw_chapters = payload.templateProfile.chapters if payload.templateProfile else None
     chapters = _validate_chapters(raw_chapters) or DEFAULT_CHAPTERS
-    # Remove front-matter items from body — they're handled separately
     FRONT_MATTER = {"certificate", "declaration", "acknowledgement",
                     "table of contents", "contents", "list of figures", "list of tables"}
     body_chapters = [c for c in chapters if c.lower() not in FRONT_MATTER]
@@ -258,8 +349,6 @@ def _build_fallback_latex(payload: "GenerateReportRequest") -> str:
     spacing_cmd = _spacing(payload.templateProfile.spacing if payload.templateProfile else None)
     bib = _bib(payload.templateProfile.citation if payload.templateProfile else None)
 
-    # Front matter — note: NO \addcontentsline here, jsPDF renders raw LaTeX as text
-    # so we write clean prose-only front matter the renderer can handle
     front = rf"""\chapter*{{Certificate}}
 This is to certify that the project report titled \textbf{{{title}}} submitted by the
 student(s) is a bonafide record of work carried out under our supervision in partial
@@ -281,15 +370,12 @@ and fellow colleagues whose guidance was invaluable throughout the development o
 \textbf{{{title}}}. Special thanks are extended to the institution for providing the
 necessary resources and infrastructure."""
 
-    # Body chapters
     body_parts: list[str] = []
     for chapter in body_chapters:
         tex = f"\\chapter{{{chapter}}}\n"
         tex += _intro(chapter, title, domain) + "\n\n"
-
         if chapter == "Introduction" and description:
             tex += description + "\n\n"
-
         answers = _collect_answers_for_chapter(chapter, payload.answers)
         if answers:
             for label, value in answers:
@@ -305,12 +391,11 @@ necessary resources and infrastructure."""
 
     return rf"""\documentclass[12pt,a4paper]{{report}}
 \usepackage[margin=1in]{{geometry}}
-\usepackage{{setspace}}
 \usepackage{{hyperref}}
 \usepackage{{titlesec}}
 \usepackage{{parskip}}
-\hypersetup{{colorlinks=true, linkcolor=black, citecolor=black, urlcolor=blue}}
 {spacing_cmd}
+\hypersetup{{colorlinks=true, linkcolor=black, citecolor=black, urlcolor=blue}}
 
 \title{{{title}}}
 \author{{}}
@@ -331,22 +416,6 @@ necessary resources and infrastructure."""
 \bibliographystyle{{{bib}}}
 \bibliography{{references}}
 \end{{document}}"""
-
-
-def _spacing(s: str | None) -> str:
-    try:
-        v = float(s or "1.5")
-        if v >= 1.8: return r"\doublespacing"
-        if v < 1.3:  return r"\singlespacing"
-    except (ValueError, TypeError):
-        pass
-    return r"\onehalfspacing"
-
-
-def _bib(c: str | None) -> str:
-    if c and ("apa" in c.lower() or "harvard" in c.lower()):
-        return "apalike"
-    return "IEEEtran"
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -432,8 +501,10 @@ Rewrite each answer as a formal academic paragraph. Return a JSON object where k
         if "gemini" not in model.lower():
             kwargs["response_format"] = {"type": "json_object"}
         response = client.chat.completions.create(**kwargs)
-        import json
-        parsed = json.loads(response.choices[0].message.content.strip())
+        raw = _extract_ai_text(response).strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"```\s*$", "", raw).strip()
+        parsed = json.loads(raw)
         return {k: ("" if is_nil_answer(v) else parsed.get(k, v)) for k, v in payload.answers.items()}
     except Exception as e:
         print(f"Error enhancing answers: {e}")
@@ -451,7 +522,6 @@ async def generate_answers_public(
         f'- id="{q.id}" | "{q.label}"'
         for q in payload.questions
     )
-
     existing_block = "\n".join(
         f'- {q.id}: {payload.answers.get(q.id, "")}'
         for q in payload.questions
@@ -482,47 +552,23 @@ Rules:
         fallback = {}
         for q in payload.questions:
             existing = payload.answers.get(q.id, "")
-            if existing and not is_nil_answer(existing):
-                fallback[q.id] = existing
-            else:
-                fallback[q.id] = f"[Answer for: {q.label}]"
+            fallback[q.id] = existing if (existing and not is_nil_answer(existing)) else f"[Answer for: {q.label}]"
         return {"answers": fallback}
 
     try:
-        import json
-
         client, model = get_openai_client_and_model(api_key)
-        is_gemini = "gemini" in model.lower()
-
         kwargs: dict = dict(
             model=model,
             messages=[
-                {
-                    "role": "system",
-                    "content": "Return only a valid JSON object mapping question IDs to answer strings. No markdown, no code fences, no explanation.",
-                },
+                {"role": "system", "content": "Return only a valid JSON object mapping question IDs to answer strings. No markdown, no code fences, no explanation."},
                 {"role": "user", "content": prompt},
             ],
         )
-        if not is_gemini:
+        if "gemini" not in model.lower():
             kwargs["response_format"] = {"type": "json_object"}
 
         response = client.chat.completions.create(**kwargs)
-
-        # --- robust content extraction ---
-        raw = ""
-        choice = response.choices[0]
-
-        # Gemini thinking models put content in message.content
-        # but sometimes it's None with text in parts
-        if choice.message.content:
-            raw = choice.message.content
-        else:
-            # Try to pull from raw response internals if content is None/empty
-            try:
-                raw = choice.message.model_extra.get("content", "") or ""
-            except Exception:
-                pass
+        raw = _extract_ai_text(response)
 
         print("=" * 60)
         print("RAW GENERATE-ANSWERS RESPONSE:")
@@ -532,28 +578,20 @@ Rules:
         if not raw or not raw.strip():
             raise ValueError("Empty response from AI model")
 
-        # Strip markdown fences (```json ... ``` or ``` ... ```)
         raw = raw.strip()
         raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
         raw = re.sub(r"```\s*$", "", raw).strip()
 
-        # Find JSON object boundaries in case model prepended text
         start = raw.find("{")
         end = raw.rfind("}") + 1
         if start == -1 or end == 0:
             raise ValueError(f"No JSON object found in response: {raw[:200]}")
-        raw = raw[start:end]
+        parsed = json.loads(raw[start:end])
 
-        parsed = json.loads(raw)
-
-        # Merge: keep existing non-nil, fill rest with AI
         merged = {}
         for q in payload.questions:
             existing = payload.answers.get(q.id, "")
-            if existing and not is_nil_answer(existing):
-                merged[q.id] = existing
-            else:
-                merged[q.id] = parsed.get(q.id, "")
+            merged[q.id] = existing if (existing and not is_nil_answer(existing)) else parsed.get(q.id, "")
         return {"answers": merged}
 
     except Exception as e:
@@ -562,94 +600,51 @@ Rules:
         traceback.print_exc()
         return {"answers": {q.id: payload.answers.get(q.id, "") for q in payload.questions}}
 
+
 @router.post("/generate-report-public")
 async def generate_report_public(
     payload: GenerateReportRequest,
     x_openai_api_key: str | None = Header(None, alias="X-OpenAI-API-Key"),
 ):
-    print("<<<<<<<<<<<< NEW GENERATION.PY >>>>>>>>>>>>>>")
+    print("<<<<<<<<<<<< GENERATE REPORT >>>>>>>>>>>>>>")
 
     api_key = x_openai_api_key or settings.openai_api_key
-
     print("API KEY:", api_key[:10] + "..." if api_key else "NONE")
 
     if not api_key:
         print("NO API KEY -> FALLBACK")
         return {"latex": _build_fallback_latex(payload)}
 
-    # -------------------------
-    # Build report data
-    # -------------------------
-
     active_answers = []
-
     for key, val in payload.answers.items():
         if val and not is_nil_answer(val):
-            q_label = next(
-                (q.label for q in payload.questions if q.id == key),
-                key,
-            )
+            q_label = next((q.label for q in payload.questions if q.id == key), key)
             active_answers.append(f"- {q_label}: {val}")
 
-    answers_str = (
-        "\n".join(active_answers)
-        if active_answers
-        else "None provided"
-    )
+    answers_str = "\n".join(active_answers) if active_answers else "None provided"
 
-    raw_chapters = (
-        payload.templateProfile.chapters
-        if payload.templateProfile
-        else None
-    )
-
+    raw_chapters = payload.templateProfile.chapters if payload.templateProfile else None
     chapters = _validate_chapters(raw_chapters) or DEFAULT_CHAPTERS
 
-    FRONT_MATTER = {
-        "certificate",
-        "declaration",
-        "acknowledgement",
-        "table of contents",
-        "contents",
-        "list of figures",
-        "list of tables",
-    }
-
-    body_chapters = [
-        c
-        for c in chapters
-        if c.lower() not in FRONT_MATTER
-    ]
-
-    chapters_instruction = (
-        "Use exactly these chapters in order: "
-        + ", ".join(body_chapters)
-    )
+    FRONT_MATTER = {"certificate", "declaration", "acknowledgement",
+                    "table of contents", "contents", "list of figures", "list of tables"}
+    body_chapters = [c for c in chapters if c.lower() not in FRONT_MATTER]
+    chapters_instruction = "Use exactly these chapters in order: " + ", ".join(body_chapters)
 
     style_lines = []
-
     if payload.templateProfile:
         if payload.templateProfile.citation:
-            style_lines.append(
-                f"Citation style: {payload.templateProfile.citation}."
-            )
-
+            style_lines.append(f"Citation style: {payload.templateProfile.citation}.")
         try:
             spacing = float(payload.templateProfile.spacing or "1.5")
-
             if spacing >= 1.8:
-                style_lines.append(r"Use \doublespacing.")
+                style_lines.append(r"Use \renewcommand{\baselinestretch}{2.0} for double spacing.")
             elif spacing >= 1.3:
-                style_lines.append(r"Use \onehalfspacing.")
+                style_lines.append(r"Use \renewcommand{\baselinestretch}{1.5} for one-and-a-half spacing.")
             else:
-                style_lines.append(r"Use \singlespacing.")
-
+                style_lines.append(r"Use \renewcommand{\baselinestretch}{1.0} for single spacing.")
         except Exception:
-            style_lines.append(r"Use \onehalfspacing.")
-
-    # -------------------------
-    # Build your REAL prompt here
-    # -------------------------
+            style_lines.append(r"Use \renewcommand{\baselinestretch}{1.5} for one-and-a-half spacing.")
 
     prompt = f"""
 You are an expert academic report writer specializing in university final-year engineering project reports.
@@ -658,14 +653,9 @@ Generate a COMPLETE professional LaTeX report.
 
 PROJECT INFORMATION
 
-Title:
-{payload.project.title}
-
-Domain:
-{payload.project.domain}
-
-Description:
-{payload.project.description}
+Title: {payload.project.title}
+Domain: {payload.project.domain}
+Description: {payload.project.description}
 
 PROJECT DETAILS PROVIDED BY THE STUDENT
 
@@ -688,11 +678,10 @@ STRICT RULES
 
 \\documentclass[12pt,a4paper]{{report}}
 
-5. Include these packages:
+5. Include ONLY these packages (all are guaranteed to be installed):
 
 \\usepackage[a4paper,margin=1in]{{geometry}}
 \\usepackage{{graphicx}}
-\\usepackage{{setspace}}
 \\usepackage[hidelinks]{{hyperref}}
 \\usepackage{{titlesec}}
 \\usepackage{{fancyhdr}}
@@ -702,10 +691,11 @@ STRICT RULES
 \\usepackage{{amsmath}}
 \\usepackage{{amssymb}}
 \\usepackage{{longtable}}
+\\usepackage{{parskip}}
 
-6. Use:
+6. For line spacing use ONLY this (do NOT use the setspace package):
 
-\\onehalfspacing
+\\renewcommand{{\\baselinestretch}}{{1.5}}
 
 7. Configure page numbers:
 
@@ -716,113 +706,158 @@ STRICT RULES
 
 8. Create a professional title page.
 
-9. Include:
+9. Include: Certificate, Declaration, Acknowledgement, Abstract, Table of Contents, List of Figures, List of Tables.
 
-- Certificate
-- Declaration
-- Acknowledgement
-- Abstract
-- Table of Contents
-- List of Figures
-- List of Tables
+10. Use Roman page numbering for preliminary pages. Switch to Arabic after the table of contents.
 
-10. Use Roman page numbering for the preliminary pages.
+11. Follow the exact chapter order supplied.
 
-11. Switch to Arabic numbering after the table of contents.
+12. Every chapter MUST start with \\chapter{{Chapter Name}}.
 
-12. Follow the exact chapter order supplied.
+13. Every chapter must contain multiple \\section{{}} and \\subsection{{}} headings.
 
-13. Every chapter MUST start with
+14. Every chapter should contain 6-10 detailed academic paragraphs.
 
-\\chapter{{Chapter Name}}
+15. Include technical explanations, algorithms, implementation details, system architecture, workflow, advantages, limitations, and analysis wherever appropriate.
 
-14. Every chapter must contain multiple
+16. Mention figures and tables naturally: Figure~\\ref{{fig:architecture}}, Table~\\ref{{tab:results}}.
 
-\\section{{}}
+17. Use citation placeholders: \\cite{{ref1}}, \\cite{{ref2}}.
 
-and
+18. Write in formal academic language suitable for university submission.
 
-\\subsection{{}}
+19. Do NOT generate placeholder text such as "Lorem ipsum", "Hello World", or "Content goes here".
 
-headings.
+20. Produce a report of approximately 40-80 pages when compiled.
 
-15. Every chapter should contain 6–10 detailed academic paragraphs.
+21. The document must compile successfully without requiring additional edits.
 
-16. Include technical explanations, algorithms, implementation details, system architecture, workflow, advantages, limitations, and analysis wherever appropriate.
+22. NEVER use \\item outside of a \\begin{itemize}, \\begin{enumerate}, or \\begin{description} environment. Every \\item MUST be inside one of these environments. Always close the environment with \\end{itemize} or \\end{enumerate} before starting a new section.
 
-17. Mention figures, tables and equations naturally using placeholders such as:
+23. NEVER use \\hline outside of a tabular environment.
 
-Figure~\\ref{{fig:architecture}}
+24. NEVER use \\\\ (double backslash line break) in normal paragraph text — only inside tabular/array environments.
 
-Table~\\ref{{tab:results}}
+25. NEVER write a bare underscore _ or caret ^ in normal paragraph text. These cause "Missing $ inserted" LaTeX errors. Always wrap identifiers with underscores inside \\texttt{{...}} or inside $...$ math mode.
 
-18. Use citation placeholders:
+26. NEVER use \\includegraphics with placeholder or invented filenames like 'placeholder.png', 'image.png', 'figure.png', 'sample.png', 'dummy.png', or any filename that does not exist. For figures, use this exact compilable placeholder pattern:
 
-\\cite{{ref1}}
+\\begin{{figure}}[H]
+\\centering
+\\fbox{{\\parbox{{0.6\\linewidth}}{{\\centering\\bigskip Figure: Description of diagram or chart \\bigskip}}}}
+\\caption{{Caption text here.}}
+\\label{{fig:label}}
+\\end{{figure}}
 
-\\cite{{ref2}}
-
-19. Write in formal academic language suitable for submission to a university.
-
-20. Do NOT generate placeholder text such as "Lorem ipsum", "Hello World", or "Content goes here".
-
-21. Produce a report of approximately 40–80 pages when compiled.
-
-22. The document must compile successfully without requiring additional edits.
+27. NEVER use \\graphicspath. NEVER use \\includegraphics at all. Use ONLY the \\fbox{{\\parbox{{...}}{{...}}}} pattern above for every figure.
 
 Return ONLY the LaTeX source from \\documentclass to \\end{{document}}.
 """
 
-    print("=" * 80)
-    print("PROMPT LENGTH:", len(prompt))
-    print("=" * 80)
-    print(prompt)
-    print("=" * 80)
-
     try:
         client, model = get_openai_client_and_model(api_key)
-
         print("Provider model:", model)
 
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {
-                    "role": "system",
-                    "content": "Output ONLY raw LaTeX.",
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
+                {"role": "system", "content": "Output ONLY raw LaTeX."},
+                {"role": "user",   "content": prompt},
             ],
         )
 
-        print("=" * 80)
-        print("FULL RESPONSE")
-        print(response)
-        print("=" * 80)
-
-        content = response.choices[0].message.content
-
-        print("=" * 80)
-        print("RAW CONTENT")
-        print(content)
-        print("=" * 80)
-
-        content = content.strip()
-
+        content = _extract_ai_text(response).strip()
         content = re.sub(r"^```latex\s*", "", content, flags=re.IGNORECASE)
-        content = re.sub(r"^```\s*", "", content)
-        content = re.sub(r"```\s*$", "", content).strip()
+        content = re.sub(r"^```\s*",      "", content)
+        content = re.sub(r"```\s*$",      "", content).strip()
 
+        # ── Backend sanitise pass: fix endcsname triggers before returning ──
+        import re as _re
+
+        def _sanitise_label(arg: str) -> str:
+            """Remove chars that cause endcsname errors from label/ref arguments."""
+            return (_re.sub(r'[_^&$#%~{}\\]', '-', arg)
+                      .replace(' ', '-')
+                      .replace('--', '-')
+                      .strip('-'))
+
+        # Fix \label{}, \ref{}, \pageref{}, \autoref{}, \nameref{}, \eqref{}
+        def _fix_label_args(src: str) -> str:
+            return _re.sub(
+                r'\\(label|ref|pageref|autoref|nameref|eqref|cite|bibitem)\{([^}]+)\}',
+                lambda m: f'\\{m.group(1)}{{{_sanitise_label(m.group(2))}}}',
+                src
+            )
+
+        # Fix \hyperref[label]{text}
+        def _fix_hyperref(src: str) -> str:
+            return _re.sub(
+                r'\\hyperref\[([^\]]+)\]',
+                lambda m: f'\\hyperref[{_sanitise_label(m.group(1))}]',
+                src
+            )
+
+        # Remove setspace package and its commands
+        def _fix_setspace(src: str) -> str:
+            src = _re.sub(r'\\usepackage(?:\[[^\]]*\])?\{setspace\}\n?', '', src)
+            src = _re.sub(r'\\(onehalfspacing|doublespacing|singlespacing)\n?', '', src)
+            return src
+
+        # Remove \includegraphics with any filename (they all fail — no images on server)
+        def _fix_graphics(src: str) -> str:
+            src = _re.sub(r'\\graphicspath\{[^}]*\}\n?', '', src)
+            src = _re.sub(
+                r'\\includegraphics(?:\[[^\]]*\])?\{[^}]*\}',
+                r'\\fbox{\\parbox{0.6\\linewidth}{\\centering Figure placeholder}}',
+                src
+            )
+            return src
+
+        content = _fix_label_args(content)
+        content = _fix_hyperref(content)
+        content = _fix_setspace(content)
+        content = _fix_graphics(content)
+
+        print("BACKEND SANITISE PASS COMPLETE")
+
+        # ── Diagnostic: scan for endcsname triggers before returning ──
+        import re as _re
+        lines = content.split("\n")
+        print("=" * 60)
+        print(f"LATEX OUTPUT: {len(lines)} lines, {len(content)} chars")
+        
+        # Find all \label, \ref, \hyperref with special chars
+        bad_label_pattern = _re.compile(
+            r'\\(label|ref|pageref|autoref|nameref|eqref|hyperref)[\[{]([^\]}\]]*[_^&$#%~][^\]}\]*)[}\]]'
+        )
+        for i, line in enumerate(lines, 1):
+            m = bad_label_pattern.search(line)
+            if m:
+                print(f"  ENDCSNAME RISK L{i}: {repr(line.strip()[:120])}")
+        
+        # Find \usepackage{setspace}
+        for i, line in enumerate(lines, 1):
+            if 'setspace' in line or 'onehalfspacing' in line or 'doublespacing' in line:
+                print(f"  SETSPACE L{i}: {repr(line.strip())}")
+        
+        # Find \includegraphics
+        for i, line in enumerate(lines, 1):
+            if '\\includegraphics' in line or r'\includegraphics' in line:
+                print(f"  INCLUDEGRAPHICS L{i}: {repr(line.strip()[:120])}")
+
+        # Show lines 930-970 (where errors are occurring)
+        print("\nLINES 925-970:")
+        for i, line in enumerate(lines[924:969], 925):
+            print(f"  {i}: {repr(line[:100])}")
+        print("=" * 60)
+        
         return {"latex": content}
 
     except Exception:
         import traceback
-
         traceback.print_exc()
         raise
+
 
 @router.post("/questions-public")
 async def generate_questions_public(
@@ -836,16 +871,16 @@ async def generate_questions_public(
     api_key = x_openai_api_key or settings.openai_api_key
     if not api_key:
         return {"questions": [
-            {"id": "problem_statement", "label": "What specific problem does your project solve?", "type": "textarea"},
-            {"id": "objectives",        "label": "What are the primary objectives of the project?", "type": "textarea"},
-            {"id": "scope",             "label": "What is included and excluded from the project scope?", "type": "textarea"},
+            {"id": "problem_statement", "label": "What specific problem does your project solve?",           "type": "textarea"},
+            {"id": "objectives",        "label": "What are the primary objectives of the project?",          "type": "textarea"},
+            {"id": "scope",             "label": "What is included and excluded from the project scope?",    "type": "textarea"},
             {"id": "existing_system",   "label": "Describe the existing/current system and its limitations.", "type": "textarea"},
             {"id": "proposed_system",   "label": "Describe your proposed system and how it improves on the existing one.", "type": "textarea"},
-            {"id": "tech_stack",        "label": "What technologies, tools, and frameworks are used?", "type": "textarea"},
-            {"id": "testing_methods",   "label": "How was the system tested and what were the results?", "type": "textarea"},
+            {"id": "tech_stack",        "label": "What technologies, tools, and frameworks are used?",       "type": "textarea"},
+            {"id": "testing_methods",   "label": "How was the system tested and what were the results?",     "type": "textarea"},
         ]}
 
-    prompt = f"""Generate 7–9 specific questionnaire questions to gather student details for a high-quality academic report.
+    prompt = f"""Generate 7-9 specific questionnaire questions to gather student details for a high-quality academic report.
 
 Project Title: {payload.project.title}
 Domain: {payload.project.domain}
@@ -865,14 +900,16 @@ Cover: problem statement, objectives, scope, existing vs proposed system, tech s
             model=model,
             messages=[
                 {"role": "system", "content": 'Return only a valid JSON object with key "questions".'},
-                {"role": "user", "content": prompt},
+                {"role": "user",   "content": prompt},
             ],
         )
         if "gemini" not in model.lower():
             kwargs["response_format"] = {"type": "json_object"}
         response = client.chat.completions.create(**kwargs)
-        import json
-        return json.loads(response.choices[0].message.content.strip())
+        raw = _extract_ai_text(response).strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"```\s*$", "", raw).strip()
+        return json.loads(raw)
     except Exception as e:
         print(f"Error generating questions: {e}")
         return {"questions": [
@@ -892,3 +929,84 @@ def research_assist(
         full_source=payload.full_source,
         api_key=x_openai_api_key,
     )
+
+
+@router.post("/polish-latex")
+async def polish_latex(
+    payload: PolishLatexRequest,
+    x_openai_api_key: str | None = Header(None, alias="X-OpenAI-API-Key"),
+):
+    """AI-powered LaTeX polish pass — removes placeholders, fixes tables, normalises formatting."""
+    api_key = x_openai_api_key or settings.openai_api_key
+
+    if not api_key:
+        return {"latex_source": _basic_clean(payload.latex_source)}
+
+    source = payload.latex_source
+    MAX_CHARS = 14_000
+    truncated = False
+    if len(source) > MAX_CHARS:
+        half = MAX_CHARS // 2
+        source_for_ai = (
+            source[:half]
+            + "\n\n% ... [middle section preserved, not sent for polish] ...\n\n"
+            + source[-half:]
+        )
+        truncated = True
+    else:
+        source_for_ai = source
+
+    prompt = f"""You are an expert LaTeX editor. Polish the following LaTeX source for a university project report.
+
+Project Title: {payload.project.title}
+Domain: {payload.project.domain}
+
+TASKS (in order of priority):
+1. Remove ALL placeholder text: "lorem ipsum", "[Answer for: ...]", "Content goes here", "Hello World", "Detailed content for the X phase will be populated...", "[Figure here]", "[Table here]", "[Citation needed]", "TODO", "FIXME". Replace with realistic academic content based on the project title and domain.
+2. Fix malformed LaTeX table environments (unbalanced & columns, missing \\hline, broken longtable).
+3. Ensure every \\begin{{figure}} has a matching \\caption and \\label.
+4. Ensure every \\begin{{table}} has a matching \\caption and \\label.
+5. Fix duplicate \\section or \\chapter headings.
+6. Remove triple+ blank lines.
+7. Fix obvious \\ref{{}} and \\cite{{}} mismatches.
+8. Do NOT change correct academic content, chapter structure, or package declarations.
+9. Return ONLY the complete corrected LaTeX source. No explanation. No markdown.
+
+LaTeX source:
+
+{source_for_ai}"""
+
+    try:
+        client, model = get_openai_client_and_model(api_key)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "Output ONLY the corrected LaTeX source starting with \\documentclass. No markdown, no fences."},
+                {"role": "user",   "content": prompt},
+            ],
+        )
+
+        content = _extract_ai_text(response).strip()
+        content = re.sub(r"^```latex\s*", "", content, flags=re.IGNORECASE)
+        content = re.sub(r"^```\s*",      "", content)
+        content = re.sub(r"```\s*$",      "", content).strip()
+
+        if content and (content.startswith("\\") or content.startswith("%")):
+            if truncated:
+                half = MAX_CHARS // 2
+                original_middle = payload.latex_source[half:-half]
+                mid_marker = "% ... [middle section preserved"
+                if mid_marker in content:
+                    ai_start, ai_end = content.split(mid_marker, 1)
+                    ai_end = ai_end.split("\n", 1)[-1] if "\n" in ai_end else ai_end
+                    return {"latex_source": ai_start + original_middle + ai_end}
+            return {"latex_source": content}
+
+        print(f"Polish: unexpected AI output, falling back. Preview: {content[:100]}")
+        return {"latex_source": _basic_clean(payload.latex_source)}
+
+    except Exception as e:
+        print(f"Error polishing LaTeX: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"latex_source": _basic_clean(payload.latex_source)}

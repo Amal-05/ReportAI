@@ -9,14 +9,14 @@ import { FirebaseConfigWarning } from "@/components/firebase-config-warning";
 import { GenerationTimeline } from "@/components/generation-timeline";
 import { QualityPanel } from "@/components/quality-panel";
 import { UploadWizard } from "@/components/upload-wizard";
+import { LiveEditor } from "@/components/live-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 import { deleteProject, getProject, saveQuestionnaire, saveReportDraft } from "@/lib/firestore";
 import { getFirebaseDb } from "@/lib/firebase";
-import { analyzeQuality, generateLatex, enhanceAnswersWithAI, generateLatexWithAI } from "@/lib/report-generation";
+import { analyzeQuality, generateLatex, enhanceAnswersWithAI, generateLatexWithAI, polishLatexWithAI } from "@/lib/report-generation";
 import { generateAIQuestions, generateFallbackQuestions } from "@/lib/ai-generator";
 import type { Question } from "@/lib/questionnaire";
 import type { Project, QualityScore } from "@/lib/types";
@@ -25,8 +25,6 @@ import { FileDown, Settings, Sparkles, Loader2, RefreshCcw } from "lucide-react"
 import { LatexErrorPanel } from "@/components/latex-error-panel";
 import { compileReport, createReport } from "@/lib/api";
 import { LaTeXError } from "@/lib/types";
-import { generateAnswersWithAI } from "@/lib/report-generation";
-
 
 export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const { user, loading, configured } = useAuth();
@@ -42,7 +40,6 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const [compileErrors, setCompileErrors] = useState<LaTeXError[]>([]);
   const [activeReportId, setActiveReportId] = useState<string | null>(null);
   const router = useRouter();
-  const [isGeneratingAnswers, setIsGeneratingAnswers] = useState(false);
 
   async function loadProjectData() {
     if (!user) return;
@@ -155,11 +152,13 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
       setIsSaving(false);
     }
   }
+
   async function generateAnswers() {
     if (!user || !project) return;
-    setIsGeneratingAnswers(true);
+    setIsSaving(true);
     setMessage("AI is generating answers for your questionnaire...");
     try {
+      const { generateAnswersWithAI } = await import("@/lib/report-generation");
       const nextAnswers = await generateAnswersWithAI(answers, questions, project);
       setAnswers(nextAnswers);
       await saveQuestionnaire(user.uid, project.id, questions, nextAnswers);
@@ -167,9 +166,10 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not generate answers.");
     } finally {
-      setIsGeneratingAnswers(false);
+      setIsSaving(false);
     }
   }
+
   async function generateReport() {
     if (!user || !project) return;
     setIsSaving(true);
@@ -193,7 +193,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
       setLatex(nextLatex);
       setQuality(nextQuality);
       setProject({ ...project, status: "latex_ready", latest_latex: nextLatex, quality_score: nextQuality.overall });
-      setMessage("Report draft dynamically generated and quality score saved to Firebase.");
+      setMessage("Report draft generated. Open the Live Editor below to review, polish, and compile your PDF.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not generate report.");
     } finally {
@@ -201,13 +201,11 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     }
   }
 
-
   async function downloadPdf() {
     if (!user || !project || !latex) return;
     setIsSaving(true);
     try {
       generateAndDownloadPdf(project.title, latex);
-      // Update status to compiled in Firebase
       await saveReportDraft(user.uid, project.id, latex, quality ?? {
         grammar: 84,
         readability: 82,
@@ -235,7 +233,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
       const report = await createReport(project.id);
       setActiveReportId(report.id);
       const result = await compileReport(report.id);
-      
+
       if (result.ok) {
         setMessage("Official compilation successful! TeX logs verified.");
         setCompileErrors([]);
@@ -255,6 +253,33 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     if (!user || !project) return;
     await deleteProject(user.uid, project.id);
     router.push("/dashboard");
+  }
+
+  // ── Live Editor handlers ──────────────────────────────────────────────────
+
+  /** Called by LiveEditor autosave — persist to Firebase */
+  async function handleEditorSave(source: string): Promise<void> {
+    if (!user || !project) return;
+    setLatex(source);
+    const q = analyzeQuality(source, 0);
+    await saveReportDraft(user.uid, project.id, source, q);
+    setQuality(q);
+    setProject((p) => p ? { ...p, latest_latex: source } : p);
+  }
+
+  /** Called by LiveEditor Polish button — runs AI cleanup, returns polished source */
+  async function handleEditorPolish(source: string): Promise<string> {
+    if (!project) return source;
+    const polished = await polishLatexWithAI(source, project);
+    // Also persist the polished version
+    if (user) {
+      const q = analyzeQuality(polished, 0);
+      await saveReportDraft(user.uid, project.id, polished, q);
+      setQuality(q);
+      setLatex(polished);
+      setProject((p) => p ? { ...p, latest_latex: polished } : p);
+    }
+    return polished;
   }
 
   if (!configured) return <FirebaseConfigWarning />;
@@ -305,6 +330,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
 
       <section className="mt-6 grid gap-5 xl:grid-cols-[1fr_380px]">
         <div className="space-y-5">
+          {/* ── Questionnaire card ── */}
           <Card className="overflow-hidden border border-border bg-card shadow-md">
             <CardHeader className="border-b bg-muted/20 pb-4">
               <div>
@@ -344,16 +370,13 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                 <Button
                   variant="outline"
                   onClick={generateAnswers}
-                  disabled={isGeneratingAnswers || isSaving}
+                  disabled={isSaving}
                   className="flex items-center gap-1.5 text-xs font-semibold"
                 >
-                  {isGeneratingAnswers
-                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    : <Sparkles className="h-3.5 w-3.5 text-accent" />
-                  }
-                  {isGeneratingAnswers ? "Generating..." : "Generate Answers"}
+                  <Sparkles className="h-3.5 w-3.5 text-accent animate-pulse" />
+                  Generate Answers
                 </Button>
-                <Button 
+                <Button
                   variant="outline"
                   onClick={enhanceAnswers}
                   disabled={isSaving}
@@ -362,10 +385,10 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                   <Sparkles className="h-3.5 w-3.5 text-accent animate-pulse" />
                   Auto-Enhance with AI
                 </Button>
-                <Button 
-                  variant="outline" 
-                  onClick={triggerAiQuestionGeneration} 
-                  disabled={isGeneratingQuestions} 
+                <Button
+                  variant="outline"
+                  onClick={triggerAiQuestionGeneration}
+                  disabled={isGeneratingQuestions}
                   className="flex items-center gap-1 text-xs border-dashed font-medium text-muted-foreground hover:text-foreground"
                 >
                   <Sparkles className="h-3.5 w-3.5 text-accent" />
@@ -374,31 +397,41 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
               </div>
             </CardContent>
           </Card>
+
+          {/* ── Live Editor (replaces old raw Textarea + LatexErrorPanel) ── */}
           {latex ? (
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle>Generated LaTeX Draft</CardTitle>
-                <Button variant="outline" size="sm" onClick={downloadPdf} className="flex items-center gap-1.5 text-xs font-semibold">
-                  <FileDown className="h-3.5 w-3.5 text-accent" />
-                  Compile & Download PDF
-                </Button>
+            <Card className="overflow-hidden border border-border shadow-md">
+              <CardHeader className="border-b bg-muted/20 pb-3">
+                <CardTitle className="text-lg font-semibold">Live LaTeX Editor</CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Autosaves and compiles in the background. Drag the divider to resize panes. Ctrl+S to compile manually.
+                </p>
               </CardHeader>
-              <CardContent>
-                <Textarea value={latex} onChange={(event) => setLatex(event.target.value)} className="min-h-80 font-mono" />
+              <CardContent className="p-4">
+                <LiveEditor
+                  latex={latex}
+                  onLatexChange={setLatex}
+                  onSave={handleEditorSave}
+                  onPolish={handleEditorPolish}
+                  reportId={activeReportId}
+                  projectTitle={project.title}
+                />
               </CardContent>
             </Card>
           ) : null}
-          {activeReportId && compileErrors.length > 0 && (
-            <LatexErrorPanel 
-              reportId={activeReportId} 
-              errors={compileErrors} 
-              onFixApplied={() => {
-                officialCompile(); // Re-compile after fix
-              }} 
+
+          {/* Legacy compile error panel — shown for officialCompile errors */}
+          {activeReportId && compileErrors.length > 0 && !latex && (
+            <LatexErrorPanel
+              reportId={activeReportId}
+              errors={compileErrors}
+              onFixApplied={() => { officialCompile(); }}
             />
           )}
+
           <QualityPanel score={quality} />
         </div>
+
         <div className="space-y-5">
           <UploadWizard projectId={project.id} onSuccess={loadProjectData} />
           <GenerationTimeline status={project.status} />

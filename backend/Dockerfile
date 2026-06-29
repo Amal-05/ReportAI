@@ -6,7 +6,18 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends build-essential curl texlive-latex-base latexmk pandoc \
+  && apt-get install -y --no-install-recommends \
+  build-essential \
+  curl \
+  latexmk \
+  pandoc \
+  biber \
+  texlive-latex-base \
+  texlive-latex-recommended \
+  texlive-latex-extra \
+  texlive-fonts-recommended \
+  texlive-science \
+  texlive-bibtex-extra \
   && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./

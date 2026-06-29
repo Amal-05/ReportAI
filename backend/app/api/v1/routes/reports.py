@@ -166,7 +166,17 @@ def compile_raw_report(
         ok=ok,
         log=log,
         pdf_storage_key=pdf_key,
-        errors=[LaTeXError(**err) for err in enriched_errors],
+        errors=[
+            LaTeXError(
+                line=err.get("line"),
+                message=err.get("message", "Unknown error"),
+                context=err.get("context"),
+                source_fragment=err.get("source_fragment"),
+                suggested_fix=err.get("suggested_fix"),
+                section_id=err.get("section_id"),
+            )
+            for err in enriched_errors
+        ],
     )
 
 
