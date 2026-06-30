@@ -159,7 +159,10 @@ export function LatexEditor({
     const handleScroll = useCallback(() => {
         const ta = textareaRef.current;
         if (!ta) return;
-        if (highlightRef.current) highlightRef.current.scrollTop = ta.scrollTop;
+        if (highlightRef.current) {
+            highlightRef.current.scrollTop = ta.scrollTop;
+            highlightRef.current.scrollLeft = ta.scrollLeft;
+        }
         if (gutterRef.current) gutterRef.current.scrollTop = ta.scrollTop;
     }, []);
 
@@ -223,7 +226,7 @@ export function LatexEditor({
                         {statusLabel(compileStatus)}
                     </span>
                     {errors.length > 0 && (
-                        <Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-4">
+                        <Badge className="bg-red-500/20 text-red-300 border border-red-500/30 text-[10px] px-1.5 py-0 h-4">
                             {errors.length} error{errors.length !== 1 ? "s" : ""}
                         </Badge>
                     )}

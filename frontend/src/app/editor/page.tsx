@@ -8,7 +8,7 @@
  * from Firebase, then renders the LiveEditor split pane.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { collection, getDocs, orderBy, query } from "firebase/firestore";
 import { useAuth } from "@/components/auth-provider";
 import { LiveEditor } from "@/components/live-editor";
@@ -18,9 +18,12 @@ import { analyzeQuality, polishLatexWithAI } from "@/lib/report-generation";
 import type { Project } from "@/lib/types";
 import { Loader2, FolderOpen } from "lucide-react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 
-export default function EditorPage() {
+function EditorContent() {
   const { user, loading } = useAuth();
+  const searchParams = useSearchParams();
+  const initialProjectId = searchParams.get("projectId") || "";
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
@@ -42,13 +45,17 @@ export default function EditorPage() {
       .then((snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Project));
         setProjects(list);
-        // Auto-select first project that has latex
-        const withLatex = list.find((p) => p.latest_latex);
-        if (withLatex) setSelectedId(withLatex.id);
+        if (initialProjectId) {
+          setSelectedId(initialProjectId);
+        } else {
+          // Auto-select first project that has latex
+          const withLatex = list.find((p) => p.latest_latex);
+          if (withLatex) setSelectedId(withLatex.id);
+        }
       })
       .catch(console.error)
       .finally(() => setLoadingProjects(false));
-  }, [user]);
+  }, [user, initialProjectId]);
 
   // Load selected project
   useEffect(() => {
@@ -174,5 +181,17 @@ export default function EditorPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function EditorPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center h-screen">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    }>
+      <EditorContent />
+    </Suspense>
   );
 }

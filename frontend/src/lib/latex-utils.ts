@@ -20,12 +20,12 @@ export interface EditorError {
 
 // ── Debounce ──────────────────────────────────────────────────────────────────
 
-export function debounce<T extends (...args: unknown[]) => void>(
-    fn: T,
+export function debounce<A extends any[], R>(
+    fn: (...args: A) => R,
     delay: number
-): (...args: Parameters<T>) => void {
+): (...args: A) => void {
     let timer: ReturnType<typeof setTimeout>;
-    return (...args: Parameters<T>) => {
+    return (...args: A) => {
         clearTimeout(timer);
         timer = setTimeout(() => fn(...args), delay);
     };

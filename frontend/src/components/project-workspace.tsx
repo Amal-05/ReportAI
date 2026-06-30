@@ -9,7 +9,6 @@ import { FirebaseConfigWarning } from "@/components/firebase-config-warning";
 import { GenerationTimeline } from "@/components/generation-timeline";
 import { QualityPanel } from "@/components/quality-panel";
 import { UploadWizard } from "@/components/upload-wizard";
-import { LiveEditor } from "@/components/live-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,7 +20,7 @@ import { generateAIQuestions, generateFallbackQuestions } from "@/lib/ai-generat
 import type { Question } from "@/lib/questionnaire";
 import type { Project, QualityScore } from "@/lib/types";
 import { generateAndDownloadPdf } from "@/lib/pdf-generator";
-import { FileDown, Settings, Sparkles, Loader2, RefreshCcw } from "lucide-react";
+import { FileDown, Settings, Sparkles, Loader2, RefreshCcw, FileText } from "lucide-react";
 import { LatexErrorPanel } from "@/components/latex-error-panel";
 import { compileReport, createReport } from "@/lib/api";
 import { LaTeXError } from "@/lib/types";
@@ -193,7 +192,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
       setLatex(nextLatex);
       setQuality(nextQuality);
       setProject({ ...project, status: "latex_ready", latest_latex: nextLatex, quality_score: nextQuality.overall });
-      setMessage("Report draft generated. Open the Live Editor below to review, polish, and compile your PDF.");
+      setMessage("Report draft generated. Open the Live Editor tab or click 'Open in Live Editor' to review, polish, and compile your PDF.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not generate report.");
     } finally {
@@ -255,33 +254,6 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     router.push("/dashboard");
   }
 
-  // ── Live Editor handlers ──────────────────────────────────────────────────
-
-  /** Called by LiveEditor autosave — persist to Firebase */
-  async function handleEditorSave(source: string): Promise<void> {
-    if (!user || !project) return;
-    setLatex(source);
-    const q = analyzeQuality(source, 0);
-    await saveReportDraft(user.uid, project.id, source, q);
-    setQuality(q);
-    setProject((p) => p ? { ...p, latest_latex: source } : p);
-  }
-
-  /** Called by LiveEditor Polish button — runs AI cleanup, returns polished source */
-  async function handleEditorPolish(source: string): Promise<string> {
-    if (!project) return source;
-    const polished = await polishLatexWithAI(source, project);
-    // Also persist the polished version
-    if (user) {
-      const q = analyzeQuality(polished, 0);
-      await saveReportDraft(user.uid, project.id, polished, q);
-      setQuality(q);
-      setLatex(polished);
-      setProject((p) => p ? { ...p, latest_latex: polished } : p);
-    }
-    return polished;
-  }
-
   if (!configured) return <FirebaseConfigWarning />;
   if (loading || (user && projectLoading)) return <p className="text-sm text-muted-foreground">Loading project...</p>;
   if (!user) {
@@ -312,6 +284,12 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
           <Button variant="outline" onClick={removeProject}>Delete</Button>
           {latex ? (
             <div className="flex gap-2">
+              <Button asChild className="flex items-center gap-2">
+                <Link href={`/editor?projectId=${project.id}`}>
+                  <FileText className="h-4 w-4" />
+                  Open in Live Editor
+                </Link>
+              </Button>
               <Button onClick={officialCompile} disabled={isSaving} variant="outline" className="flex items-center gap-2">
                 <RefreshCcw className={`h-4 w-4 ${isSaving ? 'animate-spin' : ''}`} />
                 {isSaving ? "Verifying..." : "Verify & Auto-Fix"}
@@ -397,28 +375,6 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
               </div>
             </CardContent>
           </Card>
-
-          {/* ── Live Editor (replaces old raw Textarea + LatexErrorPanel) ── */}
-          {latex ? (
-            <Card className="overflow-hidden border border-border shadow-md">
-              <CardHeader className="border-b bg-muted/20 pb-3">
-                <CardTitle className="text-lg font-semibold">Live LaTeX Editor</CardTitle>
-                <p className="text-xs text-muted-foreground">
-                  Autosaves and compiles in the background. Drag the divider to resize panes. Ctrl+S to compile manually.
-                </p>
-              </CardHeader>
-              <CardContent className="p-4">
-                <LiveEditor
-                  latex={latex}
-                  onLatexChange={setLatex}
-                  onSave={handleEditorSave}
-                  onPolish={handleEditorPolish}
-                  reportId={activeReportId}
-                  projectTitle={project.title}
-                />
-              </CardContent>
-            </Card>
-          ) : null}
 
           {/* Legacy compile error panel — shown for officialCompile errors */}
           {activeReportId && compileErrors.length > 0 && !latex && (

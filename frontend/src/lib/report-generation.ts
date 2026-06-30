@@ -2,8 +2,7 @@ import type { Project, QualityScore } from "@/lib/types";
 import type { Question } from "./questionnaire";
 import { getOpenAiApiKey } from "@/lib/utils";
 import { generateLatex } from "./pdf-generator";
-import type { Project } from "./types";
-import type { Question } from "./questionnaire";
+
 
 // Re-export so existing imports still work
 export { generateLatex };
