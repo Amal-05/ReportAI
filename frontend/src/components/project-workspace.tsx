@@ -280,27 +280,27 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
           </div>
           <p className="mt-2 text-muted-foreground">{project.description}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" onClick={removeProject}>Delete</Button>
           {latex ? (
-            <div className="flex gap-2">
-              <Button asChild className="flex items-center gap-2">
+            <>
+              <Button asChild className="flex items-center gap-2 shrink-0">
                 <Link href={`/editor?projectId=${project.id}`}>
                   <FileText className="h-4 w-4" />
                   Open in Live Editor
                 </Link>
               </Button>
-              <Button onClick={officialCompile} disabled={isSaving} variant="outline" className="flex items-center gap-2">
+              <Button onClick={officialCompile} disabled={isSaving} variant="outline" className="flex items-center gap-2 shrink-0">
                 <RefreshCcw className={`h-4 w-4 ${isSaving ? 'animate-spin' : ''}`} />
                 {isSaving ? "Verifying..." : "Verify & Auto-Fix"}
               </Button>
-              <Button onClick={downloadPdf} disabled={isSaving} className="bg-accent text-accent-foreground hover:bg-accent/90 flex items-center gap-2 shadow-sm font-semibold">
+              <Button onClick={downloadPdf} disabled={isSaving} className="bg-accent text-accent-foreground hover:bg-accent/90 flex items-center gap-2 shadow-sm font-semibold shrink-0">
                 <FileDown className="h-4 w-4" />
                 {isSaving ? "Compiling..." : "Download PDF"}
               </Button>
-            </div>
+            </>
           ) : null}
-          <Button onClick={generateReport} disabled={isSaving}>{isSaving ? "Working..." : "Generate Report"}</Button>
+          <Button onClick={generateReport} disabled={isSaving} className="shrink-0">{isSaving ? "Working..." : "Generate Report"}</Button>
         </div>
       </header>
 
